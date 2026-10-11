@@ -1,7 +1,15 @@
 # Teardown always runs in this order, whatever order the steps were added:
-# remove the folder mount point, dismount, remove the empty mount folder,
-# then remove the extract.
-$script:TeardownOrder = @('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveExtract')
+# remove the folder mount point, dismount the differencing child, remove the
+# empty mount folder, delete the differencing child, then remove the extract.
+# The parent image is never touched.
+$script:TeardownOrder = @('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'RemoveExtract')
+
+# Steps skipped under -KeepArtifacts. The image is always dismounted.
+$script:KeptArtifactKinds = @('RemoveDiffChild', 'RemoveExtract')
+
+# Steps skipped when an image may still be mounted, because the files they
+# remove could still be in use.
+$script:NeedsDismountKinds = @('RemoveMountFolder', 'RemoveDiffChild', 'RemoveExtract')
 
 function Add-TeardownStep {
     [CmdletBinding()]
@@ -11,7 +19,7 @@ function Add-TeardownStep {
         [System.Collections.Generic.List[object]]$Teardown,
 
         [Parameter(Mandatory)]
-        [ValidateSet('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveExtract')]
+        [ValidateSet('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'RemoveExtract')]
         [string]$Kind,
 
         [Parameter(Mandatory)]
@@ -97,13 +105,15 @@ function Invoke-CollectionCleanup {
     .SYNOPSIS
         Tears down whatever Resolve-CollectionInput set up for a collection.
     .DESCRIPTION
-        Runs in a fixed order: remove the folder mount point, dismount,
-        remove the empty mount folder, remove the extract. With
-        KeepArtifacts the extract stays on disk, but the image is always
-        dismounted.
+        Runs in a fixed order: remove the folder mount point, dismount the
+        differencing child, remove the empty mount folder, delete the
+        differencing child, remove the extract. With KeepArtifacts the
+        differencing child and extract stay on disk, but the image is
+        always dismounted.
 
-        If removing the mount point or dismounting fails, the mount folder
-        and extract are left in place, since the image may still be in use.
+        If removing the mount point or dismounting fails, the mount folder,
+        differencing child and extract are left in place, since the image
+        may still be in use.
         Every other step still runs. All failures are reported together at
         the end.
 
@@ -125,12 +135,12 @@ function Invoke-CollectionCleanup {
 
     foreach ($kind in $script:TeardownOrder) {
         foreach ($step in @($Resolved.Teardown | Where-Object { $_.Kind -eq $kind -and -not $_.Done })) {
-            if ($kind -eq 'RemoveExtract' -and $Resolved.KeepArtifacts) {
-                Write-Verbose "Keeping extract $($step.Target) (-KeepArtifacts)."
+            if ($script:KeptArtifactKinds -contains $kind -and $Resolved.KeepArtifacts) {
+                Write-Verbose "Keeping $($step.Target) (-KeepArtifacts)."
                 $step.Done = $true
                 continue
             }
-            if (($kind -eq 'RemoveMountFolder' -or $kind -eq 'RemoveExtract') -and $mountStillActive) {
+            if ($script:NeedsDismountKinds -contains $kind -and $mountStillActive) {
                 $errors.Add("Left $($step.Target) in place because an image may still be mounted.")
                 continue
             }
@@ -145,6 +155,9 @@ function Invoke-CollectionCleanup {
                     }
                     'RemoveMountFolder' {
                         Remove-MountFolder -Path $step.Target -MountRoot $step.Root
+                    }
+                    'RemoveDiffChild' {
+                        Remove-DifferencingChild -Path $step.Target -DiffRoot $step.Root
                     }
                     'RemoveExtract' {
                         Remove-CollectionExtract -Path $step.Target -WorkRoot $step.Root
@@ -187,8 +200,7 @@ function Clear-StaleExtract {
         $images = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue |
                 Where-Object { Test-DiskImageName -Name $_.Name })
         foreach ($image in $images) {
-            $state = Get-DiskImage -ImagePath $image.FullName -ErrorAction SilentlyContinue
-            if ($null -ne $state -and $state.Attached) {
+            if (Test-ImageAttached -ImagePath $image.FullName) {
                 throw "Leftover extract $Path holds $($image.FullName), which is still attached. Dismount it and rerun."
             }
         }
@@ -204,14 +216,16 @@ function Resolve-CollectionInput {
         Turns a discovered collection into a path Hayabusa can read with -d.
     .DESCRIPTION
         Loose: the folder as is.
-        Vhd or Vhdx: mounted read-only.
+        Vhd or Vhdx: mounted through a differencing child under
+        OutputRoot\_diff, so the evidence image is never written.
         Zip: extracted to OutputRoot\_work\<collection> after safety checks.
         If the extract holds exactly one disk image, that image is mounted
-        read-only. Otherwise the extract is used as a loose folder. Nothing
-        deeper than this one level is unpacked.
+        the same way. Otherwise the extract is used as a loose folder.
+        Nothing deeper than this one level is unpacked.
 
         Returns Collection, Source, InputType, SourcePath, Path, ImagePath,
-        ExtractPath, MountPath, Warnings, Teardown and KeepArtifacts.
+        ChildPath, ExtractPath, MountPath, Warnings, Teardown and
+        KeepArtifacts.
         Warnings holds what was found at resolve time. Discovery warnings
         stay on the discovered collection.
 
@@ -239,6 +253,7 @@ function Resolve-CollectionInput {
 
     $workRoot = Join-Path -Path $OutputRoot -ChildPath '_work'
     $mountRoot = Join-Path -Path $OutputRoot -ChildPath '_mnt'
+    $diffRoot = Join-Path -Path $OutputRoot -ChildPath '_diff'
     $teardown = New-Object System.Collections.Generic.List[object]
     $warnings = New-Object System.Collections.Generic.List[string]
 
@@ -249,6 +264,7 @@ function Resolve-CollectionInput {
         SourcePath    = $Collection.SourcePath
         Path          = $null
         ImagePath     = $null
+        ChildPath     = $null
         ExtractPath   = $null
         MountPath     = $null
         Warnings      = $warnings
@@ -262,8 +278,9 @@ function Resolve-CollectionInput {
                 $result.Path = $Collection.SourcePath
             }
             { $_ -eq 'Vhd' -or $_ -eq 'Vhdx' } {
-                $mount = Mount-CollectionImage -ImagePath $Collection.SourcePath -MountRoot $mountRoot -Collection $Collection.Collection -Teardown $teardown
+                $mount = Mount-CollectionImage -ImagePath $Collection.SourcePath -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown
                 $result.ImagePath = $Collection.SourcePath
+                $result.ChildPath = $mount.ChildPath
                 $result.MountPath = $mount.MountPath
                 $result.Path = $mount.Path
             }
@@ -295,8 +312,9 @@ function Resolve-CollectionInput {
                     if ($evtx.Count -gt 0) {
                         $warnings.Add("Skipped evidence: $($evtx.Count) loose evtx file(s) beside the disk image were not processed.")
                     }
-                    $mount = Mount-CollectionImage -ImagePath $images[0].FullName -MountRoot $mountRoot -Collection $Collection.Collection -Teardown $teardown
+                    $mount = Mount-CollectionImage -ImagePath $images[0].FullName -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown
                     $result.ImagePath = $images[0].FullName
+                    $result.ChildPath = $mount.ChildPath
                     $result.MountPath = $mount.MountPath
                     $result.Path = $mount.Path
                 }

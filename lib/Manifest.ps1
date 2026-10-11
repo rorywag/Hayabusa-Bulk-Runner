@@ -9,6 +9,7 @@ $script:ManifestColumns = @(
     'InputType'
     'Status'
     'Detections'
+    'Emergency'
     'Critical'
     'High'
     'Warning'
@@ -189,6 +190,7 @@ function New-RunManifestRow {
         [string]$HostName = '',
 
         [int]$Detections = 0,
+        [int]$Emergency = 0,
         [int]$Critical = 0,
         [int]$High = 0,
 
@@ -211,6 +213,7 @@ function New-RunManifestRow {
         InputType   = $InputType
         Status      = $Status
         Detections  = $Detections
+        Emergency   = $Emergency
         Critical    = $Critical
         High        = $High
         Warning     = (ConvertTo-ManifestText -Message $WarningMessage)
@@ -303,6 +306,7 @@ function Set-RunManifestEntry {
         [string]$HostName = '',
 
         [int]$Detections = 0,
+        [int]$Emergency = 0,
         [int]$Critical = 0,
         [int]$High = 0,
 
@@ -320,7 +324,7 @@ function Set-RunManifestEntry {
     $entries = Get-RunManifest -Path $Path
     $entries[$Collection] = New-RunManifestRow -Collection $Collection -Source $Source -RunId $RunId `
         -InputType $InputType -Status $Status -HostName $HostName -Detections $Detections `
-        -Critical $Critical -High $High -WarningMessage $WarningMessage -ErrorMessage $ErrorMessage `
+        -Emergency $Emergency -Critical $Critical -High $High -WarningMessage $WarningMessage -ErrorMessage $ErrorMessage `
         -DurationSec $DurationSec
 
     if ($PSCmdlet.ShouldProcess($Path, "Update manifest entry for $Collection")) {

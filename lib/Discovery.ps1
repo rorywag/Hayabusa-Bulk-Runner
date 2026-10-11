@@ -15,6 +15,7 @@ $script:EventLogRelativePath = 'Windows\System32\winevt\Logs'
 $script:ReservedCollectionNames = @(
     '_work'
     '_mnt'
+    '_diff'
     '_runs'
     'run_manifest.csv'
     'run_manifest.csv.tmp'

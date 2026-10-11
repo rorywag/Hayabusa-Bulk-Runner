@@ -1,5 +1,7 @@
-# Severity order, highest first. Unknown levels rank below informational.
+# Severity order, highest first. Emergency is above critical. Unknown
+# levels rank below informational.
 $script:SeverityRank = @{
+    'emergency'     = 6
     'critical'      = 5
     'high'          = 4
     'medium'        = 3
@@ -26,7 +28,7 @@ $script:ReadableStatuses = @('Completed', 'CompletedWithErrors', 'Failed')
 # detections at the severity floor, or a host that never produced results.
 $script:UnknownHostMarker = '[unknown]'
 
-$script:HostCsvColumns = @('Host', 'Collection', 'Status', 'Critical', 'High', 'Medium', 'Low', 'Total', 'TopRule')
+$script:HostCsvColumns = @('Host', 'Collection', 'Status', 'Emergency', 'Critical', 'High', 'Medium', 'Low', 'Total', 'TopRule')
 $script:RuleCsvColumns = @('RuleTitle', 'Level', 'HostsAffected', 'TotalHits')
 $script:RollupRequiredColumns = @('Level', 'RuleTitle')
 
@@ -62,6 +64,7 @@ function Read-HostDetection {
     )
 
     $result = [pscustomobject]@{
+        Emergency     = 0
         Critical      = 0
         High          = 0
         Medium        = 0
@@ -87,6 +90,7 @@ function Read-HostDetection {
         $title = [string]$_.RuleTitle
         $result.Total++
         switch ($level) {
+            'emergency' { $result.Emergency++ }
             'critical' { $result.Critical++ }
             'high' { $result.High++ }
             'medium' { $result.Medium++ }
@@ -274,7 +278,7 @@ function Get-RollupData {
         Hosts: one row per manifest row. A blank Host becomes [unknown].
         Counts are null, shown blank, when there is no readable CSV, so a
         host that never produced results does not read as clean. Sorted by
-        Critical, High, Medium, Low and Total, highest first, then problem
+        Emergency, Critical, High, Medium, Low and Total, highest first, then problem
         statuses first, then Collection.
 
         Rules: one row per RuleTitle and Level. HostsAffected counts
@@ -360,9 +364,9 @@ function Get-RollupData {
             }
         }
 
-        $c = $null; $h = $null; $m = $null; $l = $null; $t = $null
+        $em = $null; $c = $null; $h = $null; $m = $null; $l = $null; $t = $null
         if ($null -ne $detection) {
-            $c = $detection.Critical; $h = $detection.High; $m = $detection.Medium; $l = $detection.Low; $t = $detection.Total
+            $em = $detection.Emergency; $c = $detection.Critical; $h = $detection.High; $m = $detection.Medium; $l = $detection.Low; $t = $detection.Total
         }
         $topTitle = $null
         $topLevel = $null
@@ -377,6 +381,7 @@ function Get-RollupData {
                 Collection   = $collection
                 Source       = [string]$entry.Source
                 Status       = [string]$entry.Status
+                Emergency    = $em
                 Critical     = $c
                 High         = $h
                 Medium       = $m
@@ -394,6 +399,7 @@ function Get-RollupData {
 
     $zero = { param($v) if ($null -eq $v) { 0 } else { [int]$v } }
     $sortedHosts = @($hosts | Sort-Object -Property @(
+            @{ Expression = { & $zero $_.Emergency }; Descending = $true }
             @{ Expression = { & $zero $_.Critical }; Descending = $true }
             @{ Expression = { & $zero $_.High }; Descending = $true }
             @{ Expression = { & $zero $_.Medium }; Descending = $true }

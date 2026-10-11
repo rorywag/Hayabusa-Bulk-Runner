@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 4
+$script:RunMetaSchemaVersion = 5
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -36,7 +36,7 @@ function New-RunMeta {
         Builds the provenance record for one run.
     .DESCRIPTION
         Filled from the resolved settings, the collections discovered for
-        this run, the output of hayabusa --version stored verbatim, and the
+        this run, the version line from hayabusa help stored verbatim, and the
         rule set's newest file and count. CompletedUtc, Summary and Rollup
         are set when the batch and rollup finish. Nothing is written to disk here.
     #>
@@ -112,7 +112,6 @@ function New-RunMeta {
         Hayabusa        = [ordered]@{
             Path              = $HayabusaPath
             Version           = $HayabusaVersion.Version
-            VersionOutput     = @($HayabusaVersion.Output)
             VersionError      = $HayabusaVersion.Error
             RulesPath         = $Resolved.Selection.RulesPath
             RulesVersion      = $RulesVersion.Summary

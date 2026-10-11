@@ -39,7 +39,8 @@
     Full path to hayabusa.exe.
 
 .PARAMETER MinLevel
-    Severity floor passed to Hayabusa. Defaults to high. When given on the
+    Severity floor passed to Hayabusa: informational, low, medium, high,
+    critical or emergency. Defaults to high. When given on the
     command line it overrides MinLevel or ExactLevel from the config file.
 
 .PARAMETER Threads
@@ -76,7 +77,7 @@ param(
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$HayabusaPath,
 
-    [ValidateSet('informational', 'low', 'medium', 'high', 'critical')]
+    [ValidateSet('informational', 'low', 'medium', 'high', 'critical', 'emergency')]
     [string]$MinLevel = 'high',
 
     [ValidateRange(1, 256)]
@@ -93,7 +94,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ToolVersion = '0.4.0'
+$ToolVersion = '0.5.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
 foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')) {
@@ -142,7 +143,7 @@ if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
     throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
 }
 
-# Provenance for run-meta. A failed --version call is recorded, not fatal.
+# Provenance for run-meta. A failed version read is recorded, not fatal.
 $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
 if ($null -ne $hayabusaVersion.Error) {
     Write-Warning "Could not read the Hayabusa version: $($hayabusaVersion.Error)"

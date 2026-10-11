@@ -13,7 +13,7 @@
     # hayabusa.exe. A relative path is taken relative to this file.
     # RulesPath = 'D:\Tools\hayabusa\rules'
 
-    # Severity floor: informational, low, medium, high or critical.
+    # Severity floor: informational, low, medium, high, critical or emergency.
     # Set MinLevel or ExactLevel, not both.
     MinLevel = 'high'
     # ExactLevel = 'critical'

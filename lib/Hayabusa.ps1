@@ -261,14 +261,23 @@ function Invoke-HayabusaProcess {
     }
 }
 
+# Hayabusa 4.1.0 has no --version flag. The version is the banner line
+# printed by help, for example "Hayabusa v4.1.0 - Suzumushi Release".
+$script:VersionLinePattern = '^\s*Hayabusa v\d+\.\d+'
+
 function Get-HayabusaVersion {
     <#
     .SYNOPSIS
-        Runs hayabusa --version once at startup and returns its output.
+        Runs hayabusa help once at startup and returns its version line.
     .DESCRIPTION
-        The output is stored verbatim: Version is the first non-empty line
-        and Output is every non-empty line. If the call fails, Version is
-        null and Error says why. The run carries on either way.
+        Version is the first output line that starts with "Hayabusa v"
+        and a dotted version number, stored verbatim apart from surrounding
+        whitespace and colour codes. Matching the pattern, not just taking
+        the first line, keeps a logo printed above the banner from being
+        taken as the version, and anchoring it to the start of the line
+        keeps a mention of the name later in the help text from matching. If no
+        line matches or the call fails, Version is null and Error says why.
+        The run carries on either way.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -279,7 +288,6 @@ function Get-HayabusaVersion {
 
     $result = [pscustomobject]@{
         Version  = $null
-        Output   = @()
         ExitCode = $null
         Error    = $null
     }
@@ -287,19 +295,24 @@ function Get-HayabusaVersion {
     try {
         Assert-HayabusaHost
         $lines = New-Object System.Collections.Generic.List[string]
-        $exit = Invoke-NativeCapture -FilePath $HayabusaPath -Argument @('--version') -OnLine {
+        $exit = Invoke-NativeCapture -FilePath $HayabusaPath -Argument @('help') -OnLine {
             param($line)
-            if (-not [string]::IsNullOrWhiteSpace($line)) {
-                $lines.Add($line.TrimEnd())
-            }
+            $lines.Add($line)
         }
         $result.ExitCode = $exit
-        $result.Output = $lines.ToArray()
-        if ($lines.Count -gt 0) {
-            $result.Version = $lines[0]
+
+        foreach ($line in $lines) {
+            if ($line -match $script:VersionLinePattern) {
+                $result.Version = $line.Trim()
+                break
+            }
         }
-        if ($exit -ne 0) {
-            $result.Error = "hayabusa --version exited with code $exit"
+
+        if ($null -eq $result.Version) {
+            $result.Error = "No line matching 'Hayabusa v<version>' in hayabusa help output (exit code $exit)."
+        }
+        elseif ($exit -ne 0) {
+            $result.Error = "hayabusa help exited with code $exit. Version line was still read."
         }
     }
     catch {

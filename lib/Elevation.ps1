@@ -56,7 +56,7 @@ function Assert-ElevationForContainer {
     .SYNOPSIS
         Fails fast if any collection needs a mount and the session is not elevated.
     .DESCRIPTION
-        Mount-DiskImage needs an elevated session. Checking at startup, before
+        Mount-DiskImage and diskpart need an elevated session. Checking at startup, before
         anything is extracted or written, stops a long run failing partway
         through on the first disk image. That includes images nested inside
         a ZIP, found by listing the archive's entries. Loose folders and ZIPs
@@ -83,7 +83,7 @@ function Assert-ElevationForContainer {
 
     if (-not (Test-IsElevated)) {
         throw ("InputRoot holds {0} collection(s) with disk images that must be mounted: {1}. " +
-            'Mount-DiskImage requires an elevated session. Rerun from an ' +
+            'Mount-DiskImage and diskpart require an elevated session. Rerun from an ' +
             'Administrator PowerShell prompt.') -f $needing.Count, $names
     }
 

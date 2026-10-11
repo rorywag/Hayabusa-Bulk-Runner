@@ -7,8 +7,12 @@ $script:MaxComputersListed = 20
 # Columns the minimal parse needs from the standard profile.
 $script:RequiredResultColumns = @('Level', 'Computer')
 
-# Hayabusa may write levels in short or full form. Both map to the full word.
+# Hayabusa has six levels: emergency, critical, high, medium, low and
+# informational. Short and full forms are both accepted, case-insensitively,
+# and map to the full word.
 $script:LevelAliases = @{
+    'emer'          = 'emergency'
+    'emergency'     = 'emergency'
     'crit'          = 'critical'
     'critical'      = 'critical'
     'high'          = 'high'
@@ -22,8 +26,8 @@ $script:LevelAliases = @{
 function ConvertTo-SeverityName {
     <#
     .SYNOPSIS
-        Normalises a Hayabusa Level value to critical, high, medium, low or
-        informational.
+        Normalises a Hayabusa Level value to emergency, critical, high,
+        medium, low or informational.
     .DESCRIPTION
         Case-insensitive. A value that is not a known level is returned
         lowercased and trimmed, so it is kept rather than dropped.
@@ -66,8 +70,8 @@ function Get-HayabusaResultSummary {
         Counts detections in a per-host Hayabusa CSV for the manifest row.
     .DESCRIPTION
         Streams the CSV rather than loading it whole. Returns whether the
-        file exists, the total detection count, the Critical and High
-        counts, and each distinct Computer value with its row count.
+        file exists, the total detection count, the Emergency, Critical and
+        High counts, and each distinct Computer value with its row count.
         Computer values are compared case-insensitively. Blank values are
         ignored.
 
@@ -86,6 +90,7 @@ function Get-HayabusaResultSummary {
         Exists     = $false
         Empty      = $true
         Detections = 0
+        Emergency  = 0
         Critical   = 0
         High       = 0
         Computers  = [ordered]@{}
@@ -109,13 +114,17 @@ function Get-HayabusaResultSummary {
     $counts = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::OrdinalIgnoreCase)
     $firstSeen = New-Object System.Collections.Generic.List[string]
     $total = 0
+    $emergency = 0
     $critical = 0
     $high = 0
 
     Import-Csv -LiteralPath $CsvPath -Encoding UTF8 | ForEach-Object {
         $total++
         $level = ConvertTo-SeverityName -Level $_.Level
-        if ($level -eq 'critical') {
+        if ($level -eq 'emergency') {
+            $emergency++
+        }
+        elseif ($level -eq 'critical') {
             $critical++
         }
         elseif ($level -eq 'high') {
@@ -141,6 +150,7 @@ function Get-HayabusaResultSummary {
 
     $summary.Empty = ($total -eq 0)
     $summary.Detections = $total
+    $summary.Emergency = $emergency
     $summary.Critical = $critical
     $summary.High = $high
     $summary.Computers = $ordered

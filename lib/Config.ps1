@@ -11,7 +11,8 @@ $script:ConfigKeys = @(
     'ZipMaxRatio'
 )
 
-$script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical')
+# Hayabusa's six levels, lowest to highest. Emergency is above critical.
+$script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical', 'emergency')
 $script:OutputProfiles = @('standard', 'verbose')
 
 # Hayabusa expects --timeline-start and --timeline-end in this form,

@@ -119,10 +119,12 @@ function Invoke-CollectionRun {
 
     $hostName = ''
     $detections = 0
+    $emergency = 0
     $critical = 0
     $high = 0
     if ($null -ne $summary) {
         $detections = $summary.Detections
+        $emergency = $summary.Emergency
         $critical = $summary.Critical
         $high = $summary.High
         $picked = Resolve-HostName -Computers $summary.Computers
@@ -137,7 +139,7 @@ function Invoke-CollectionRun {
 
     Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
         -RunId $RunId -InputType $Collection.InputType -Status $status -HostName $hostName `
-        -Detections $detections -Critical $critical -High $high `
+        -Detections $detections -Emergency $emergency -Critical $critical -High $high `
         -WarningMessage $finalWarnings -ErrorMessage $errors.ToArray() -DurationSec $timer.Elapsed.TotalSeconds
 
     [pscustomobject]@{
@@ -145,6 +147,7 @@ function Invoke-CollectionRun {
         Status      = $status
         HostName    = $hostName
         Detections  = $detections
+        Emergency   = $emergency
         Critical    = $critical
         High        = $high
         ExitCode    = $exitCode

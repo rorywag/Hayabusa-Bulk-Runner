@@ -8,12 +8,13 @@ $script:SummaryTopRules = 5
 $script:RuleCollectionsShown = 10
 
 # Only these values become CSS class names. Anything else maps to "other".
-$script:KnownLevels = @('critical', 'high', 'medium', 'low', 'informational')
+$script:KnownLevels = @('emergency', 'critical', 'high', 'medium', 'low', 'informational')
 $script:KnownStatuses = @('Pending', 'Running', 'Completed', 'CompletedWithErrors', 'Failed', 'Skipped')
 
 $script:DashboardCss = @'
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5b6577; --line: #dde1e8;
+  --emer: #9b1470; --emer-bg: #f9e0f0;
   --crit: #b4232c; --crit-bg: #fbe4e5; --high: #b85a00; --high-bg: #fdebd8;
   --med: #8a6d00; --med-bg: #fbf3cf; --low: #2457a6; --low-bg: #e1ebfa;
   --info: #56606f; --info-bg: #eceef2; --ok: #2b7a3d; --ok-bg: #e0f2e4;
@@ -22,6 +23,7 @@ $script:DashboardCss = @'
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14171d; --panel: #1c2028; --text: #e4e7ed; --muted: #9aa3b2; --line: #2e3440;
+    --emer: #ff8fd6; --emer-bg: #4a1a3b;
     --crit: #ff8a8f; --crit-bg: #4a1d21; --high: #ffb36b; --high-bg: #47301a;
     --med: #f0d264; --med-bg: #3f3818; --low: #8fb6ff; --low-bg: #1d2c47;
     --info: #b3bac6; --info-bg: #2a2f38; --ok: #7ed492; --ok-bg: #1d3a25;
@@ -39,7 +41,7 @@ h2 { font-size: 17px; margin: 28px 0 10px; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .tile .n { font-size: 24px; font-weight: 600; }
 .tile .l { color: var(--muted); font-size: 12px; }
-.tile.crit .n { color: var(--crit); } .tile.high .n { color: var(--high); }
+.tile.emer .n { color: var(--emer); } .tile.crit .n { color: var(--crit); } .tile.high .n { color: var(--high); }
 .tile.med .n { color: var(--med); } .tile.low .n { color: var(--low); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
 .panel h3 { font-size: 14px; margin: 0 0 8px; }
@@ -53,6 +55,7 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr:last-child td { border-bottom: none; }
 .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.lv-emergency { color: var(--emer); background: var(--emer-bg); }
 .lv-critical { color: var(--crit); background: var(--crit-bg); }
 .lv-high { color: var(--high); background: var(--high-bg); }
 .lv-medium { color: var(--med); background: var(--med-bg); }
@@ -190,7 +193,8 @@ function New-DashboardHtml {
     .SYNOPSIS
         Builds index.html from the rollup data.
     .DESCRIPTION
-        Order: summary leading with the top critical and high rules, the
+        Order: summary leading with the top emergency, critical and high
+        rules, the
         full rule table, the host table with links to each host's report,
         timeline and log, then provenance. Every value is HTML-encoded.
         Links are relative paths under OutputRoot and only appear when the
@@ -211,10 +215,12 @@ function New-DashboardHtml {
 
     $sum = { param($prop) $t = 0; foreach ($h in $hosts) { if ($null -ne $h.$prop) { $t += [int]$h.$prop } }; $t }
     $withAny = { param($prop) @($hosts | Where-Object { $null -ne $_.$prop -and [int]$_.$prop -gt 0 }).Count }
+    $emerTotal = & $sum 'Emergency'
     $critTotal = & $sum 'Critical'
     $highTotal = & $sum 'High'
     $medTotal = & $sum 'Medium'
     $lowTotal = & $sum 'Low'
+    $hostsEmer = & $withAny 'Emergency'
     $hostsCrit = & $withAny 'Critical'
     $hostsHigh = & $withAny 'High'
     $failed = @($hosts | Where-Object { $_.Status -eq 'Failed' }).Count
@@ -238,16 +244,18 @@ function New-DashboardHtml {
     [void]$sb.AppendLine('<h1>Hayabusa triage</h1>')
     [void]$sb.AppendLine("<p class=`"meta`">Built $(& $e $Data.BuiltUtc) from $(& $e $hosts.Count) collection(s). $(& $e $rules.Count) rule(s) fired.</p>")
     [void]$sb.AppendLine('<div class="tiles">')
+    [void]$sb.AppendLine("<div class=`"tile emer`"><div class=`"n`">$(& $e $emerTotal)</div><div class=`"l`">emergency detections on $(& $e $hostsEmer) host(s)</div></div>")
     [void]$sb.AppendLine("<div class=`"tile crit`"><div class=`"n`">$(& $e $critTotal)</div><div class=`"l`">critical detections on $(& $e $hostsCrit) host(s)</div></div>")
     [void]$sb.AppendLine("<div class=`"tile high`"><div class=`"n`">$(& $e $highTotal)</div><div class=`"l`">high detections on $(& $e $hostsHigh) host(s)</div></div>")
     [void]$sb.AppendLine("<div class=`"tile med`"><div class=`"n`">$(& $e $medTotal)</div><div class=`"l`">medium detections</div></div>")
     [void]$sb.AppendLine("<div class=`"tile low`"><div class=`"n`">$(& $e $lowTotal)</div><div class=`"l`">low detections</div></div>")
     [void]$sb.AppendLine('</div>')
 
-    $top = @($rules | Where-Object { $_.Level -eq 'critical' -or $_.Level -eq 'high' } | Select-Object -First $script:SummaryTopRules)
-    [void]$sb.AppendLine('<div class="panel"><h3>Top critical and high rules</h3>')
+    $topLevels = @('emergency', 'critical', 'high')
+    $top = @($rules | Where-Object { $topLevels -contains $_.Level } | Select-Object -First $script:SummaryTopRules)
+    [void]$sb.AppendLine('<div class="panel"><h3>Top emergency, critical and high rules</h3>')
     if ($top.Count -eq 0) {
-        [void]$sb.AppendLine('<p class="dim">No critical or high rules fired.</p>')
+        [void]$sb.AppendLine('<p class="dim">No emergency, critical or high rules fired.</p>')
     }
     else {
         [void]$sb.AppendLine('<ol>')
@@ -296,7 +304,7 @@ function New-DashboardHtml {
     }
     else {
         [void]$sb.AppendLine('<div class="wrap"><table>')
-        [void]$sb.AppendLine('<thead><tr><th>Host</th><th>Collection</th><th>Status</th><th class="n">Crit</th><th class="n">High</th><th class="n">Med</th><th class="n">Low</th><th class="n">Total</th><th>Top rule</th><th>Open</th><th>Notes</th></tr></thead><tbody>')
+        [void]$sb.AppendLine('<thead><tr><th>Host</th><th>Collection</th><th>Status</th><th class="n">Emer</th><th class="n">Crit</th><th class="n">High</th><th class="n">Med</th><th class="n">Low</th><th class="n">Total</th><th>Top rule</th><th>Open</th><th>Notes</th></tr></thead><tbody>')
         foreach ($h in $hosts) {
             if ($h.HostUnknown) {
                 $hostCell = "$(& $e $h.Collection)<span class=`"tag`">host unknown</span>"
@@ -335,6 +343,7 @@ function New-DashboardHtml {
             }
 
             [void]$sb.Append("<tr><td>$hostCell</td><td>$(& $e $h.Collection)$source</td><td>$(Get-StatusBadge -Status $h.Status)</td>")
+            [void]$sb.Append((ConvertTo-CountCell -Value $h.Emergency))
             [void]$sb.Append((ConvertTo-CountCell -Value $h.Critical))
             [void]$sb.Append((ConvertTo-CountCell -Value $h.High))
             [void]$sb.Append((ConvertTo-CountCell -Value $h.Medium))

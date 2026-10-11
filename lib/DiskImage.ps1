@@ -4,6 +4,14 @@ $script:VolumeWaitSeconds = 10
 $script:DriveLetterWaitSeconds = 3
 $script:PollMilliseconds = 500
 
+# KAPE VHD and VHDX containers are dirty on creation, so a read-only mount
+# surfaces no disk and no volume. Each image is mounted through a
+# differencing child instead: the child is mounted read-write, the journal
+# replays into the child, and the parent image is never written.
+#
+# The Windows-only calls are kept in the small wrapper functions below so
+# the orchestration in Mount-CollectionImage can be tested without them.
+
 function Assert-MountSupported {
     [CmdletBinding()]
     param()
@@ -13,6 +21,232 @@ function Assert-MountSupported {
     }
     if ($null -eq (Get-Command -Name Mount-DiskImage -ErrorAction SilentlyContinue)) {
         throw 'Mount-DiskImage is not available. The Storage module is required.'
+    }
+}
+
+function Get-DiskpartPath {
+    # Full path, so a diskpart.exe earlier on PATH is never picked up.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    return [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'diskpart.exe')
+}
+
+function Get-DifferencingChildScript {
+    <#
+    .SYNOPSIS
+        Returns the diskpart script that creates a differencing child.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ParentPath,
+
+        [Parameter(Mandatory)]
+        [string]$ChildPath
+    )
+
+    foreach ($p in @($ParentPath, $ChildPath)) {
+        if ($p.Contains('"')) {
+            throw "Path contains a double quote and cannot be passed to diskpart: $p"
+        }
+    }
+    return "create vdisk file=`"$ChildPath`" parent=`"$ParentPath`""
+}
+
+function Test-ImageAttached {
+    # True if Windows reports the image file as attached.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ImagePath
+    )
+
+    Assert-MountSupported
+    $state = Get-DiskImage -ImagePath $ImagePath -ErrorAction SilentlyContinue
+    return ($null -ne $state -and [bool]$state.Attached)
+}
+
+function New-DifferencingChild {
+    <#
+    .SYNOPSIS
+        Creates a differencing child of an image with diskpart.
+    .DESCRIPTION
+        diskpart rather than New-VHD, so Hyper-V is not needed. The script
+        is piped to diskpart's standard input. Success is checked twice:
+        diskpart's exit code, and that the child file now exists. On failure
+        diskpart's output is included in the error.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ParentPath,
+
+        [Parameter(Mandatory)]
+        [string]$ChildPath
+    )
+
+    Assert-MountSupported
+    $script = Get-DifferencingChildScript -ParentPath $ParentPath -ChildPath $ChildPath
+
+    if (-not $PSCmdlet.ShouldProcess($ChildPath, "Create differencing child of $ParentPath")) {
+        return
+    }
+
+    $ErrorActionPreference = 'Continue'
+    $output = @($script | & (Get-DiskpartPath) 2>&1 | ForEach-Object { [string]$_ })
+    $exit = $LASTEXITCODE
+
+    if ($exit -ne 0 -or -not (Test-Path -LiteralPath $ChildPath -PathType Leaf)) {
+        $detail = (($output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' | ')
+        throw "diskpart did not create the differencing child $ChildPath (exit code $exit). $detail"
+    }
+}
+
+function Mount-ImageFile {
+    # Mounts the differencing child read-write. Never called on a parent.
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ImagePath
+    )
+
+    Assert-MountSupported
+    if ($PSCmdlet.ShouldProcess($ImagePath, 'Mount read-write')) {
+        Mount-DiskImage -ImagePath $ImagePath -Access ReadWrite -ErrorAction Stop | Out-Null
+    }
+}
+
+function Dismount-CollectionImage {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ImagePath
+    )
+
+    Assert-MountSupported
+
+    if (-not $PSCmdlet.ShouldProcess($ImagePath, 'Dismount')) {
+        return
+    }
+
+    Dismount-DiskImage -ImagePath $ImagePath -ErrorAction Stop | Out-Null
+    if (Test-ImageAttached -ImagePath $ImagePath) {
+        throw "$ImagePath is still attached after Dismount-DiskImage."
+    }
+}
+
+function Get-ImageVolumeCandidate {
+    <#
+    .SYNOPSIS
+        Lists partitions of a mounted image that carry a file system.
+    .DESCRIPTION
+        Follows the association chain Get-DiskImage | Get-Disk |
+        Get-Partition | Get-Volume. The image's Number property does not
+        resolve reliably for a mounted image, so it is not used.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ImagePath
+    )
+
+    Assert-MountSupported
+
+    $disk = Get-DiskImage -ImagePath $ImagePath -ErrorAction Stop | Get-Disk -ErrorAction SilentlyContinue
+    if ($null -eq $disk) {
+        return
+    }
+
+    foreach ($partition in @($disk | Get-Partition -ErrorAction SilentlyContinue)) {
+        $volume = $partition | Get-Volume -ErrorAction SilentlyContinue
+        if ($null -eq $volume -or [string]::IsNullOrEmpty($volume.FileSystem)) {
+            continue
+        }
+        $letter = $null
+        if ($partition.DriveLetter -and [char]::IsLetter([char]$partition.DriveLetter)) {
+            $letter = [string]$partition.DriveLetter
+        }
+        [pscustomobject]@{
+            DiskNumber      = $partition.DiskNumber
+            PartitionNumber = $partition.PartitionNumber
+            DriveLetter     = $letter
+            VolumePath      = $volume.Path
+            FileSystem      = $volume.FileSystem
+        }
+    }
+}
+
+function Add-CollectionAccessPath {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [int]$DiskNumber,
+
+        [Parameter(Mandatory)]
+        [int]$PartitionNumber,
+
+        [Parameter(Mandatory)]
+        [string]$AccessPath
+    )
+
+    Assert-MountSupported
+
+    if ($PSCmdlet.ShouldProcess($AccessPath, 'Add partition access path')) {
+        Add-PartitionAccessPath -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber -AccessPath $AccessPath -ErrorAction Stop
+    }
+}
+
+function Remove-CollectionAccessPath {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [int]$DiskNumber,
+
+        [Parameter(Mandatory)]
+        [int]$PartitionNumber,
+
+        [Parameter(Mandatory)]
+        [string]$AccessPath
+    )
+
+    Assert-MountSupported
+
+    if ($PSCmdlet.ShouldProcess($AccessPath, 'Remove partition access path')) {
+        Remove-PartitionAccessPath -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber -AccessPath $AccessPath -ErrorAction Stop
+    }
+}
+
+function Remove-DifferencingChild {
+    <#
+    .SYNOPSIS
+        Deletes a differencing child file.
+    .DESCRIPTION
+        Only a .vhd or .vhdx file directly inside DiffRoot is deleted. The
+        caller has already dismounted it.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$DiffRoot
+    )
+
+    $parent = Split-Path -Path $Path -Parent
+    $sameRoot = $parent.TrimEnd('\', '/').Equals($DiffRoot.TrimEnd('\', '/'), [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $sameRoot -or -not (Test-DiskImageName -Name $Path)) {
+        throw "Refusing to delete ${Path}: it is not a differencing child directly under $DiffRoot."
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    if ($PSCmdlet.ShouldProcess($Path, 'Delete differencing child')) {
+        [System.IO.File]::Delete($Path)
     }
 }
 
@@ -26,7 +260,7 @@ function Test-VolumeHasEventLog {
         [string]$VolumePath
     )
 
-    $rel = 'Windows\System32\winevt\Logs'
+    $rel = [System.IO.Path]::Combine('Windows', 'System32', 'winevt', 'Logs')
     try {
         if ([System.IO.Directory]::Exists([System.IO.Path]::Combine($VolumePath, $rel))) {
             return $true
@@ -41,38 +275,6 @@ function Test-VolumeHasEventLog {
         Write-Verbose "Could not inspect volume ${VolumePath}: $($_.Exception.Message)"
     }
     return $false
-}
-
-function Get-ImageVolumeCandidate {
-    # Lists partitions of a mounted image that carry a file system.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$ImagePath
-    )
-
-    $image = Get-DiskImage -ImagePath $ImagePath -ErrorAction Stop
-    if ($null -eq $image.Number) {
-        return
-    }
-
-    foreach ($partition in @(Get-Partition -DiskNumber $image.Number -ErrorAction SilentlyContinue)) {
-        $volume = $partition | Get-Volume -ErrorAction SilentlyContinue
-        if ($null -eq $volume -or [string]::IsNullOrEmpty($volume.FileSystem)) {
-            continue
-        }
-        $letter = $null
-        if ($partition.DriveLetter -and [char]::IsLetter([char]$partition.DriveLetter)) {
-            $letter = [string]$partition.DriveLetter
-        }
-        [pscustomobject]@{
-            DiskNumber      = $image.Number
-            PartitionNumber = $partition.PartitionNumber
-            DriveLetter     = $letter
-            VolumePath      = $volume.Path
-            FileSystem      = $volume.FileSystem
-        }
-    }
 }
 
 function Resolve-ImageVolume {
@@ -135,21 +337,25 @@ function Resolve-ImageVolume {
 function Mount-CollectionImage {
     <#
     .SYNOPSIS
-        Mounts a disk image read-only and returns the path to hand to -d.
+        Mounts an image through a differencing child and returns the path
+        to hand to -d.
     .DESCRIPTION
-        Mount-DiskImage is read-write by default, so -Access ReadOnly is
-        always passed. The drive letter Windows assigns is used. If none is
-        assigned, the volume is attached to an empty folder under MountRoot
-        with Add-PartitionAccessPath instead. That folder lives on the output
-        volume, not on the evidence.
-
-        An image that is already attached is refused rather than reused or
-        dismounted, since this run did not mount it.
+        1. Refuses if the parent image is already attached: it was not
+           mounted by this run, so it is left alone.
+        2. Creates a differencing child at DiffRoot\<Collection>.<ext>, the
+           extension matching the parent. A leftover child from an earlier
+           run is replaced, unless it is still attached.
+        3. Mounts the child read-write. The journal replays into the child
+           and the parent is never written.
+        4. Picks the volume through the disk association chain, uses the
+           drive letter Windows assigns, and falls back to an empty folder
+           under MountRoot attached with Add-PartitionAccessPath when no
+           letter is assigned.
 
         Each step that needs undoing is added to Teardown as soon as it
         succeeds, so Invoke-CollectionCleanup can undo a partial mount.
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
@@ -157,6 +363,9 @@ function Mount-CollectionImage {
 
         [Parameter(Mandatory)]
         [string]$MountRoot,
+
+        [Parameter(Mandatory)]
+        [string]$DiffRoot,
 
         [Parameter(Mandatory)]
         [string]$Collection,
@@ -168,25 +377,41 @@ function Mount-CollectionImage {
 
     Assert-MountSupported
 
-    if (-not $PSCmdlet.ShouldProcess($ImagePath, 'Mount read-only')) {
-        return
+    if (-not (Test-DiskImageName -Name $ImagePath)) {
+        throw "Not a .vhd or .vhdx image: $ImagePath"
     }
-
-    $existing = Get-DiskImage -ImagePath $ImagePath -ErrorAction SilentlyContinue
-    if ($null -ne $existing -and $existing.Attached) {
+    if (Test-ImageAttached -ImagePath $ImagePath) {
         throw "$ImagePath is already attached. Dismount it first. It was not mounted by this run, so it is left alone."
     }
 
-    Mount-DiskImage -ImagePath $ImagePath -Access ReadOnly -ErrorAction Stop | Out-Null
-    Add-TeardownStep -Teardown $Teardown -Kind 'Dismount' -Target $ImagePath
+    if (-not (Test-Path -LiteralPath $DiffRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $DiffRoot -Force | Out-Null
+    }
+    $extension = [System.IO.Path]::GetExtension($ImagePath).ToLowerInvariant()
+    $child = Join-Path -Path $DiffRoot -ChildPath "$Collection$extension"
 
-    $volume = Resolve-ImageVolume -ImagePath $ImagePath
+    if (Test-Path -LiteralPath $child) {
+        if (Test-ImageAttached -ImagePath $child) {
+            throw "Differencing child $child from an earlier run is still attached. Dismount it and rerun."
+        }
+        Write-Verbose "Replacing leftover differencing child $child."
+        Remove-DifferencingChild -Path $child -DiffRoot $DiffRoot
+    }
+
+    New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
+    Add-TeardownStep -Teardown $Teardown -Kind 'RemoveDiffChild' -Target $child -Root $DiffRoot
+
+    Mount-ImageFile -ImagePath $child
+    Add-TeardownStep -Teardown $Teardown -Kind 'Dismount' -Target $child
+
+    $volume = Resolve-ImageVolume -ImagePath $child
 
     if ($null -ne $volume.DriveLetter) {
         return [pscustomobject]@{
             Path        = "$($volume.DriveLetter):\"
             DriveLetter = $volume.DriveLetter
             MountPath   = $null
+            ChildPath   = $child
         }
     }
 
@@ -206,52 +431,13 @@ function Mount-CollectionImage {
     Add-TeardownStep -Teardown $Teardown -Kind 'RemoveMountFolder' -Target $mountDir -Root $MountRoot
 
     $accessPath = $mountDir.TrimEnd('\') + '\'
-    Add-PartitionAccessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber -AccessPath $accessPath -ErrorAction Stop
+    Add-CollectionAccessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber -AccessPath $accessPath
     Add-TeardownStep -Teardown $Teardown -Kind 'RemoveAccessPath' -Target $accessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber
 
     return [pscustomobject]@{
         Path        = $mountDir
         DriveLetter = $null
         MountPath   = $mountDir
-    }
-}
-
-function Dismount-CollectionImage {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)]
-        [string]$ImagePath
-    )
-
-    Assert-MountSupported
-
-    if (-not $PSCmdlet.ShouldProcess($ImagePath, 'Dismount')) {
-        return
-    }
-
-    Dismount-DiskImage -ImagePath $ImagePath -ErrorAction Stop | Out-Null
-    $after = Get-DiskImage -ImagePath $ImagePath -ErrorAction SilentlyContinue
-    if ($null -ne $after -and $after.Attached) {
-        throw "$ImagePath is still attached after Dismount-DiskImage."
-    }
-}
-
-function Remove-CollectionAccessPath {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)]
-        [int]$DiskNumber,
-
-        [Parameter(Mandatory)]
-        [int]$PartitionNumber,
-
-        [Parameter(Mandatory)]
-        [string]$AccessPath
-    )
-
-    Assert-MountSupported
-
-    if ($PSCmdlet.ShouldProcess($AccessPath, 'Remove partition access path')) {
-        Remove-PartitionAccessPath -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber -AccessPath $AccessPath -ErrorAction Stop
+        ChildPath   = $child
     }
 }
