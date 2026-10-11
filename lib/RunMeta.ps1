@@ -1,0 +1,170 @@
+$script:RunMetaSchemaVersion = 1
+
+# Deep enough for every nested object in run-meta. ConvertTo-Json defaults
+# to a depth of 2 and silently flattens anything deeper.
+$script:RunMetaJsonDepth = 10
+
+function Get-RunMetaPath {
+    <#
+    .SYNOPSIS
+        Returns OutputRoot\_runs\run_meta_<utc-stamp>.json for a run.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$OutputRoot,
+
+        [Parameter(Mandatory)]
+        [datetime]$StartedUtc
+    )
+
+    $stamp = $StartedUtc.ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+    $runsDir = Join-Path -Path $OutputRoot -ChildPath '_runs'
+    return (Join-Path -Path $runsDir -ChildPath "run_meta_$stamp.json")
+}
+
+function New-RunMeta {
+    <#
+    .SYNOPSIS
+        Builds the provenance record for one run.
+    .DESCRIPTION
+        Hayabusa.Version and Hayabusa.RulesVersion stay null until the
+        binary is invoked. Every other field is filled from the resolved
+        settings for this run. Nothing is written to disk here.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RunId,
+
+        [Parameter(Mandatory)]
+        [datetime]$StartedUtc,
+
+        [Parameter(Mandatory)]
+        [string]$ToolVersion,
+
+        [Parameter(Mandatory)]
+        [string]$InputRoot,
+
+        [Parameter(Mandatory)]
+        [string]$OutputRoot,
+
+        [Parameter(Mandatory)]
+        [string]$HayabusaPath,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$Resolved,
+
+        [AllowNull()]
+        [pscustomobject]$Config,
+
+        [AllowNull()]
+        [object]$Threads,
+
+        [bool]$Force,
+        [bool]$KeepArtifacts
+    )
+
+    $configRecord = $null
+    if ($null -ne $Config) {
+        $configRecord = [ordered]@{
+            Path   = $Config.Path
+            Sha256 = $Config.Sha256
+        }
+    }
+
+    [ordered]@{
+        SchemaVersion   = $script:RunMetaSchemaVersion
+        RunId           = $RunId
+        StartedUtc      = $StartedUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        CompletedUtc    = $null
+        Tool            = [ordered]@{
+            Name              = 'Invoke-BulkHayabusa'
+            Version           = $ToolVersion
+            PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+            PowerShellEdition = $PSVersionTable.PSEdition
+        }
+        InputRoot       = $InputRoot
+        OutputRoot      = $OutputRoot
+        Config          = $configRecord
+        Hayabusa        = [ordered]@{
+            Path         = $HayabusaPath
+            Version      = $null
+            RulesPath    = $Resolved.Selection.RulesPath
+            RulesVersion = $null
+        }
+        Selection       = $Resolved.Selection
+        SelectionSource = $Resolved.Sources
+        OutputUtc       = $true
+        Options         = [ordered]@{
+            Threads       = $Threads
+            Force         = $Force
+            KeepArtifacts = $KeepArtifacts
+        }
+    }
+}
+
+function Save-RunMeta {
+    <#
+    .SYNOPSIS
+        Writes run-meta as UTF-8 JSON without a BOM.
+    .DESCRIPTION
+        A new file is created with CreateNew, so an existing run's record is
+        never overwritten. Use -Update to rewrite the current run's own file,
+        for example to set CompletedUtc.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$RunMeta,
+
+        [switch]$Update
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Write run metadata')) {
+        return
+    }
+
+    $json = ConvertTo-Json -InputObject $RunMeta -Depth $script:RunMetaJsonDepth
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+
+    $dir = Split-Path -Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    if ($Update) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw "Cannot update run metadata that does not exist: $Path"
+        }
+        [System.IO.File]::WriteAllText($Path, $json, $encoding)
+        return $Path
+    }
+
+    $stream = $null
+    try {
+        $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $bytes = $encoding.GetBytes($json)
+        $stream.Write($bytes, 0, $bytes.Length)
+    }
+    catch [System.IO.IOException] {
+        if (Test-Path -LiteralPath $Path) {
+            throw "Run metadata already exists and will not be overwritten: $Path"
+        }
+        throw
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+
+    return $Path
+}

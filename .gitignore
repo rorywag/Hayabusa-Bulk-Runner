@@ -1,0 +1,120 @@
+# Patterns use [xX] brackets so matches stay case-insensitive whatever
+# core.ignorecase is set to on the machine doing the commit.
+
+# ---------------------------------------------------------------------------
+# Evidence: event logs, disk images, archives, memory
+# ---------------------------------------------------------------------------
+*.[eE][vV][tT][xX]
+*.[eE][vV][tT]
+*.[eE][tT][lL]
+*.[vV][hH][dD][xX]
+*.[vV][hH][dD]
+*.[aA][vV][hH][dD][xX]
+*.[vV][mM][dD][kK]
+*.[eE]01
+*.[eE][xX]01
+*.[dD][dD]
+*.[rR][aA][wW]
+*.[iI][mM][gG]
+*.[iI][sS][oO]
+*.[aA][fF][fF]4
+*.[zZ][iI][pP]
+*.7[zZ]
+*.[rR][aA][rR]
+*.[tT][aA][rR]
+*.[gG][zZ]
+*.[mM][eE][mM]
+*.[dD][mM][pP]
+*.[vV][mM][eE][mM]
+[pP][aA][gG][eE][fF][iI][lL][eE].[sS][yY][sS]
+[hH][iI][bB][eE][rR][fF][iI][lL].[sS][yY][sS]
+
+# KAPE collection trees and logs
+**/[wW][iI][nN][eE][vV][tT]/
+*_[cC]onsole[lL]og.txt
+*_[cC]opy[lL]og.csv
+*_[sS]kip[lL]og.csv
+[nN][tT][uU][sS][eE][rR].[dD][aA][tT]*
+[uU][sS][rR][cC][lL][aA][sS][sS].[dD][aA][tT]*
+*.[hH][vV][eE]
+*.[pP][fF]
+$[mM][fF][tT]
+$[lL]og[fF]ile
+$[jJ]
+
+# ---------------------------------------------------------------------------
+# Hayabusa and rollup outputs
+# ---------------------------------------------------------------------------
+*.[cC][sS][vV]
+*.[jJ][sS][oO][nN]
+*.[jJ][sS][oO][nN][lL]
+*.[hH][tT][mM][lL]
+*.[hH][tT][mM]
+*.[lL][oO][gG]
+triage_hosts.csv
+triage_rules.csv
+index.html
+
+# Common output folder names, in case OutputRoot is pointed inside the repo
+[oO]utput/
+[oO]ut/
+[rR]esults/
+
+# ---------------------------------------------------------------------------
+# Extracted and mounted temp
+# ---------------------------------------------------------------------------
+_work/
+[tT]mp/
+[tT]emp/
+*.[tT][mM][pP]
+
+# ---------------------------------------------------------------------------
+# Run manifest and run metadata from real runs
+# ---------------------------------------------------------------------------
+_runs/
+run_manifest*.csv
+run_manifest*.csv.tmp
+run_meta*.json
+
+# ---------------------------------------------------------------------------
+# Local config holding real client paths
+# ---------------------------------------------------------------------------
+config/*
+*.local.*
+local/
+[eE]ngagement*.psd1
+.env
+.env.*
+
+# ---------------------------------------------------------------------------
+# Secrets and keys
+# ---------------------------------------------------------------------------
+*.[pP][fF][xX]
+*.[pP]12
+*.[pP][eE][mM]
+*.[kK][eE][yY]
+*.[kK][dD][bB][xX]
+
+# ---------------------------------------------------------------------------
+# Tooling dropped into the working tree
+# ---------------------------------------------------------------------------
+*.[eE][xX][eE]
+*.[dD][lL][lL]
+[hH]ayabusa*/
+rules/
+
+# ---------------------------------------------------------------------------
+# OS and editor files
+# ---------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# ---------------------------------------------------------------------------
+# Tracked exceptions. Keep these last so nothing above overrides them.
+# ---------------------------------------------------------------------------
+!config/engagement.example.psd1
