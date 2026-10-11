@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 1
+$script:RunMetaSchemaVersion = 2
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -31,7 +31,8 @@ function New-RunMeta {
     .DESCRIPTION
         Hayabusa.Version and Hayabusa.RulesVersion stay null until the
         binary is invoked. Every other field is filled from the resolved
-        settings for this run. Nothing is written to disk here.
+        settings and the collections discovered for this run. Nothing is
+        written to disk here.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
     [CmdletBinding()]
@@ -60,6 +61,10 @@ function New-RunMeta {
 
         [AllowNull()]
         [pscustomobject]$Config,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Collections,
 
         [AllowNull()]
         [object]$Threads,
@@ -97,13 +102,21 @@ function New-RunMeta {
             RulesVersion = $null
         }
         Selection       = $Resolved.Selection
-        SelectionSource = $Resolved.Sources
+        Limits          = $Resolved.Limits
+        SettingSource   = $Resolved.Sources
         OutputUtc       = $true
         Options         = [ordered]@{
             Threads       = $Threads
             Force         = $Force
             KeepArtifacts = $KeepArtifacts
         }
+        Collections     = @($Collections | ForEach-Object {
+                [ordered]@{
+                    Collection = $_.Collection
+                    Source     = $_.Source
+                    InputType  = $_.InputType
+                }
+            })
     }
 }
 

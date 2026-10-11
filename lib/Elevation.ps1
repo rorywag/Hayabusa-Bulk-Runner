@@ -25,58 +25,67 @@ function Test-IsElevated {
     return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Get-DiskImageContainer {
+function Get-CollectionNeedingMount {
     <#
     .SYNOPSIS
-        Lists VHDX and VHD files at the top level of InputRoot.
+        Returns the discovered collections that will need a disk image mounted.
     .DESCRIPTION
-        Only the top level is checked, the same depth host discovery uses.
-        Nothing is opened or mounted.
+        That is every Vhd and Vhdx collection, plus every Zip whose entry
+        list, read without extracting, holds a .vhd or .vhdx at any depth.
     #>
     [CmdletBinding()]
-    [OutputType([System.IO.FileInfo])]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [string]$InputRoot
+        [AllowEmptyCollection()]
+        [object[]]$Collections
     )
 
-    Get-ChildItem -LiteralPath $InputRoot -File -Force |
-        Where-Object { $_.Extension -eq '.vhdx' -or $_.Extension -eq '.vhd' }
+    foreach ($c in $Collections) {
+        if ($c.InputType -eq 'Vhd' -or $c.InputType -eq 'Vhdx') {
+            [pscustomobject]@{ Collection = $c; Reason = $c.Source }
+        }
+        elseif ($c.InputType -eq 'Zip' -and $null -ne $c.Zip -and @($c.Zip.ImageEntries).Count -gt 0) {
+            [pscustomobject]@{ Collection = $c; Reason = "$($c.Source) (contains $(@($c.Zip.ImageEntries) -join ', '))" }
+        }
+    }
 }
 
 function Assert-ElevationForContainer {
     <#
     .SYNOPSIS
-        Fails fast if InputRoot holds disk images and the session is not elevated.
+        Fails fast if any collection needs a mount and the session is not elevated.
     .DESCRIPTION
-        Mount-DiskImage needs an elevated session. Checking at startup stops a
-        long run from failing partway through on the first VHDX. ZIP and loose
-        folders do not need elevation, so runs without disk images pass
-        regardless.
+        Mount-DiskImage needs an elevated session. Checking at startup, before
+        anything is extracted or written, stops a long run failing partway
+        through on the first disk image. That includes images nested inside
+        a ZIP, found by listing the archive's entries. Loose folders and ZIPs
+        without a disk image do not need elevation.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$InputRoot
+        [AllowEmptyCollection()]
+        [object[]]$Collections
     )
 
-    $images = @(Get-DiskImageContainer -InputRoot $InputRoot)
-    if ($images.Count -eq 0) {
-        Write-Verbose 'No VHDX or VHD containers found. Elevation not required.'
+    $needing = @(Get-CollectionNeedingMount -Collections $Collections)
+    if ($needing.Count -eq 0) {
+        Write-Verbose 'No disk images to mount. Elevation not required.'
         return
     }
 
-    $names = ($images | ForEach-Object { $_.Name }) -join ', '
+    $names = ($needing | ForEach-Object { $_.Reason }) -join '; '
 
     if (-not (Test-IsWindowsHost)) {
-        throw "InputRoot contains disk images ($names). Mounting them requires Windows."
+        throw "InputRoot holds disk images that must be mounted: $names. Mounting them requires Windows."
     }
 
     if (-not (Test-IsElevated)) {
-        throw ("InputRoot contains {0} disk image(s) that must be mounted: {1}. " +
+        throw ("InputRoot holds {0} collection(s) with disk images that must be mounted: {1}. " +
             'Mount-DiskImage requires an elevated session. Rerun from an ' +
-            'Administrator PowerShell prompt.') -f $images.Count, $names
+            'Administrator PowerShell prompt.') -f $needing.Count, $names
     }
 
-    Write-Verbose "Session is elevated. $($images.Count) disk image(s) can be mounted."
+    Write-Verbose "Session is elevated. $($needing.Count) collection(s) need a disk image mounted."
 }

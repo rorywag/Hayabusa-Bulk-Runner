@@ -28,4 +28,11 @@
 
     # Output profile: standard or verbose.
     Profile = 'standard'
+
+    # ZIP safety limits, checked before anything is extracted. A ZIP over
+    # either limit is refused. Raise them for a ZIP that wraps a large
+    # fixed-size disk image, which can be both very large and very
+    # compressible.
+    ZipMaxUncompressedGB = 100
+    ZipMaxRatio          = 250
 }

@@ -1,11 +1,17 @@
+# Rows are keyed by Collection, the folder-safe name of the InputRoot entry.
+# Source is the entry's original name. Host stays blank until the event
+# Computer field has been read from the results.
 $script:ManifestColumns = @(
     'Host'
+    'Collection'
+    'Source'
     'RunId'
     'InputType'
     'Status'
     'Detections'
     'Critical'
     'High'
+    'Warning'
     'Error'
     'DurationSec'
     'Timestamp'
@@ -89,10 +95,10 @@ function Initialize-RunManifest {
 function Get-RunManifest {
     <#
     .SYNOPSIS
-        Reads run_manifest.csv into an ordered dictionary keyed by host.
+        Reads run_manifest.csv into an ordered dictionary keyed by collection.
     .DESCRIPTION
-        Host keys are case-insensitive. If a host appears more than once the
-        last row wins.
+        Collection keys are case-insensitive. If a collection appears more
+        than once the last row wins.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -108,31 +114,39 @@ function Get-RunManifest {
     }
 
     foreach ($row in @(Import-Csv -LiteralPath $Path -Encoding UTF8)) {
-        if ([string]::IsNullOrWhiteSpace($row.Host)) {
+        if ([string]::IsNullOrWhiteSpace($row.Collection)) {
             continue
         }
-        $entries[$row.Host] = $row
+        $entries[$row.Collection] = $row
     }
 
     return $entries
 }
 
-function Set-RunManifestEntry {
-    <#
-    .SYNOPSIS
-        Adds or replaces one host's row in run_manifest.csv.
-    .DESCRIPTION
-        The whole manifest is rewritten to a temporary file and then swapped
-        in, so a crash mid-write leaves the previous manifest intact.
-        Timestamp is set to the current UTC time in ISO 8601 form.
-    #>
-    [CmdletBinding(SupportsShouldProcess)]
+function ConvertTo-ManifestText {
+    # Flattens one or more messages onto a single CSV-friendly line.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$Message
+    )
+
+    $parts = @($Message | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { ($_ -replace '[\r\n]+', ' ').Trim() })
+    return ($parts -join ' | ')
+}
+
+function New-RunManifestRow {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [string]$Path,
+        [string]$Collection,
 
         [Parameter(Mandatory)]
-        [string]$HostName,
+        [string]$Source,
 
         [Parameter(Mandatory)]
         [string]$RunId,
@@ -145,34 +159,61 @@ function Set-RunManifestEntry {
         [ValidateSet('Pending', 'Running', 'Completed', 'Failed', 'Skipped')]
         [string]$Status,
 
+        [AllowEmptyString()]
+        [string]$HostName = '',
+
         [int]$Detections = 0,
         [int]$Critical = 0,
         [int]$High = 0,
 
-        [AllowEmptyString()]
-        [string]$ErrorMessage = '',
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$WarningMessage = @(),
+
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$ErrorMessage = @(),
 
         [double]$DurationSec = 0
     )
 
-    $entries = Get-RunManifest -Path $Path
-
-    $entries[$HostName] = [pscustomobject][ordered]@{
+    [pscustomobject][ordered]@{
         Host        = $HostName
+        Collection  = $Collection
+        Source      = $Source
         RunId       = $RunId
         InputType   = $InputType
         Status      = $Status
         Detections  = $Detections
         Critical    = $Critical
         High        = $High
-        Error       = ($ErrorMessage -replace '[\r\n]+', ' ')
+        Warning     = (ConvertTo-ManifestText -Message $WarningMessage)
+        Error       = (ConvertTo-ManifestText -Message $ErrorMessage)
         DurationSec = [math]::Round($DurationSec, 1)
         Timestamp   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
+}
+
+function Write-RunManifest {
+    <#
+    .SYNOPSIS
+        Writes every manifest row in one atomic save.
+    .DESCRIPTION
+        Rows go to a temporary file that is then swapped in, so a crash
+        mid-write leaves the previous manifest intact.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$Entries
+    )
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add((Get-ManifestHeaderLine))
-    $rows = @($entries.Values | Select-Object -Property $script:ManifestColumns)
+    $rows = @($Entries.Values | Select-Object -Property $script:ManifestColumns)
     if ($rows.Count -gt 0) {
         $csv = $rows | ConvertTo-Csv -NoTypeInformation
         foreach ($line in ($csv | Select-Object -Skip 1)) {
@@ -180,7 +221,7 @@ function Set-RunManifestEntry {
         }
     }
 
-    if (-not $PSCmdlet.ShouldProcess($Path, "Update manifest entry for $HostName")) {
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Write run manifest')) {
         return
     }
 
@@ -200,4 +241,104 @@ function Set-RunManifestEntry {
     else {
         Move-Item -LiteralPath $temp -Destination $Path -Force
     }
+}
+
+function Set-RunManifestEntry {
+    <#
+    .SYNOPSIS
+        Adds or replaces one collection's row in run_manifest.csv.
+    .DESCRIPTION
+        Timestamp is set to the current UTC time in ISO 8601 form. Warning
+        and Error take one or more messages, joined onto one line.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Collection,
+
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$RunId,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Loose', 'Zip', 'Vhdx', 'Vhd')]
+        [string]$InputType,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Pending', 'Running', 'Completed', 'Failed', 'Skipped')]
+        [string]$Status,
+
+        [AllowEmptyString()]
+        [string]$HostName = '',
+
+        [int]$Detections = 0,
+        [int]$Critical = 0,
+        [int]$High = 0,
+
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$WarningMessage = @(),
+
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$ErrorMessage = @(),
+
+        [double]$DurationSec = 0
+    )
+
+    $entries = Get-RunManifest -Path $Path
+    $entries[$Collection] = New-RunManifestRow -Collection $Collection -Source $Source -RunId $RunId `
+        -InputType $InputType -Status $Status -HostName $HostName -Detections $Detections `
+        -Critical $Critical -High $High -WarningMessage $WarningMessage -ErrorMessage $ErrorMessage `
+        -DurationSec $DurationSec
+
+    if ($PSCmdlet.ShouldProcess($Path, "Update manifest entry for $Collection")) {
+        Write-RunManifest -Path $Path -Entries $entries
+    }
+}
+
+function Add-PendingCollection {
+    <#
+    .SYNOPSIS
+        Records newly discovered collections as Pending.
+    .DESCRIPTION
+        Only collections not already in the manifest are added, with their
+        discovery warnings. Existing rows are left alone so earlier results
+        still drive resumability, and rows for collections no longer in
+        InputRoot stay as history. Returns the number of rows added.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Collections,
+
+        [Parameter(Mandatory)]
+        [string]$RunId
+    )
+
+    $entries = Get-RunManifest -Path $Path
+    $added = 0
+    foreach ($c in $Collections) {
+        if ($entries.Contains($c.Collection)) {
+            continue
+        }
+        $entries[$c.Collection] = New-RunManifestRow -Collection $c.Collection -Source $c.Source -RunId $RunId `
+            -InputType $c.InputType -Status 'Pending' -WarningMessage $c.Warnings
+        $added++
+    }
+
+    if ($added -gt 0 -and $PSCmdlet.ShouldProcess($Path, "Add $added pending collection(s)")) {
+        Write-RunManifest -Path $Path -Entries $entries
+    }
+    return $added
 }

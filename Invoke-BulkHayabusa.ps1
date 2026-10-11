@@ -10,8 +10,10 @@
     Hayabusa run, alert report and timeline under OutputRoot, and the results
     are rolled up into a cross-host triage view.
 
-    Every run writes a provenance record to OutputRoot\_runs and records each
-    host's outcome in OutputRoot\run_manifest.csv, keyed to the run's RunId.
+    Each top-level entry of InputRoot is a collection. Folders, .zip, .vhd
+    and .vhdx are collections. Everything else is skipped. Collections are
+    recorded in OutputRoot\run_manifest.csv, keyed by collection name, and
+    every run writes a provenance record to OutputRoot\_runs.
 
     Settings are resolved in this order: command line, then the config file
     given by -ConfigPath, then built-in defaults.
@@ -84,7 +86,7 @@ $ErrorActionPreference = 'Stop'
 $ToolVersion = '0.1.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta')) {
+foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -109,15 +111,21 @@ if ($PSBoundParameters.ContainsKey('MinLevel')) {
     $commandLine['MinLevel'] = $MinLevel
 }
 
-$resolved = Resolve-SelectionSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath
+$resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath
 
 $threadsValue = $null
 if ($PSBoundParameters.ContainsKey('Threads')) {
     $threadsValue = $Threads
 }
 
+# Discovery reads InputRoot and lists ZIP entries. Nothing is extracted,
+# mounted or written until the checks below pass.
+$collections = @(Get-InputCollection -InputRoot $InputRoot)
+Assert-UniqueCollectionName -Collections $collections
+Write-Verbose "Discovered $($collections.Count) collection(s)."
+
 # Fail before anything is written if disk images need an elevated session.
-Assert-ElevationForContainer -InputRoot $InputRoot
+Assert-ElevationForContainer -Collections $collections
 
 # Run setup
 if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
@@ -130,6 +138,8 @@ $startedUtc = (Get-Date).ToUniversalTime()
 
 $manifestPath = Join-Path -Path $OutputRoot -ChildPath 'run_manifest.csv'
 Initialize-RunManifest -Path $manifestPath | Out-Null
+$added = Add-PendingCollection -Path $manifestPath -Collections $collections -RunId $runId
+Write-Verbose "Manifest: $added new collection(s) recorded as Pending."
 
 $runMeta = New-RunMeta `
     -RunId $runId `
@@ -140,6 +150,7 @@ $runMeta = New-RunMeta `
     -HayabusaPath $HayabusaPath `
     -Resolved $resolved `
     -Config $config `
+    -Collections $collections `
     -Threads $threadsValue `
     -Force $Force.IsPresent `
     -KeepArtifacts $KeepArtifacts.IsPresent
@@ -151,10 +162,11 @@ Write-Verbose "RunId $runId"
 Write-Verbose "Manifest: $manifestPath"
 Write-Verbose "Run metadata: $runMetaPath"
 
-Write-Warning 'Host discovery and processing are not implemented yet. The run has been initialised only.'
+Write-Warning 'Hayabusa processing is not implemented yet. Collections were discovered and recorded only.'
 
 [pscustomobject]@{
     RunId        = $runId
     ManifestPath = $manifestPath
     RunMetaPath  = $runMetaPath
+    Collections  = $collections
 }

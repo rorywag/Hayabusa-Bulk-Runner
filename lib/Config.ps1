@@ -7,6 +7,8 @@ $script:ConfigKeys = @(
     'TimelineStart'
     'TimelineEnd'
     'Profile'
+    'ZipMaxUncompressedGB'
+    'ZipMaxRatio'
 )
 
 $script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical')
@@ -125,14 +127,42 @@ function ConvertTo-TimelineBound {
     return $parsed
 }
 
-function Resolve-SelectionSetting {
+function ConvertTo-PositiveNumber {
+    [CmdletBinding()]
+    [OutputType([double])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [AllowNull()]
+        [object]$Value,
+
+        [Parameter(Mandatory)]
+        [double]$Minimum
+    )
+
+    $number = 0.0
+    $ok = [double]::TryParse([string]$Value, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)
+    if (-not $ok -or [double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt $Minimum) {
+        throw ("{0} '{1}' is not valid. Use a number of at least {2}." -f $Name, $Value, $Minimum)
+    }
+    return $number
+}
+
+function Resolve-RunSetting {
     <#
     .SYNOPSIS
         Merges command line values, config file values and defaults.
     .DESCRIPTION
         Precedence per setting is command line, then config file, then
-        default. Returns the resolved settings and where each came from, so
-        run-meta records exactly what a run used.
+        default. Returns the resolved selection settings, the ZIP limits,
+        and where each setting came from, so run-meta records exactly what a
+        run used.
+
+        ZipMaxUncompressedGB caps the declared uncompressed size of one ZIP.
+        ZipMaxRatio caps its overall compression ratio. Both guard against
+        zip bombs and may need raising for a ZIP that wraps a large
+        fixed-size disk image.
 
         MinLevel and ExactLevel are mutually exclusive. A config file may set
         one or the other, not both. If the config sets ExactLevel and
@@ -162,14 +192,16 @@ function Resolve-SelectionSetting {
     }
 
     $defaults = @{
-        RulesPath     = (Join-Path -Path (Split-Path -Path $HayabusaPath -Parent) -ChildPath 'rules')
-        MinLevel      = 'high'
-        ExactLevel    = $null
-        IncludeTags   = @()
-        ExcludeTags   = @()
-        TimelineStart = $null
-        TimelineEnd   = $null
-        Profile       = 'standard'
+        RulesPath            = (Join-Path -Path (Split-Path -Path $HayabusaPath -Parent) -ChildPath 'rules')
+        MinLevel             = 'high'
+        ExactLevel           = $null
+        IncludeTags          = @()
+        ExcludeTags          = @()
+        TimelineStart        = $null
+        TimelineEnd          = $null
+        Profile              = 'standard'
+        ZipMaxUncompressedGB = 100
+        ZipMaxRatio          = 250
     }
 
     $values = @{}
@@ -253,6 +285,9 @@ function Resolve-SelectionSetting {
         }
     }
 
+    $zipMaxGB = ConvertTo-PositiveNumber -Name 'ZipMaxUncompressedGB' -Value $values['ZipMaxUncompressedGB'] -Minimum 0.001
+    $zipMaxRatio = ConvertTo-PositiveNumber -Name 'ZipMaxRatio' -Value $values['ZipMaxRatio'] -Minimum 1
+
     [pscustomobject]@{
         Selection = [ordered]@{
             RulesPath     = $rulesPath
@@ -263,6 +298,11 @@ function Resolve-SelectionSetting {
             TimelineStart = $timelineStart
             TimelineEnd   = $timelineEnd
             Profile       = $outputProfile
+        }
+        Limits    = [ordered]@{
+            ZipMaxUncompressedGB    = $zipMaxGB
+            ZipMaxUncompressedBytes = [long]($zipMaxGB * 1GB)
+            ZipMaxRatio             = $zipMaxRatio
         }
         Sources   = $sources
     }
