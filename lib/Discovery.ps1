@@ -9,6 +9,20 @@ $script:SystemFolderNames = @('$RECYCLE.BIN', 'System Volume Information')
 # Relative path whose presence marks the root of a Windows volume.
 $script:EventLogRelativePath = 'Windows\System32\winevt\Logs'
 
+# Names this tool writes directly under OutputRoot. A collection with one of
+# these names would clash with them, since each collection's output folder
+# is OutputRoot\<Collection>.
+$script:ReservedCollectionNames = @(
+    '_work'
+    '_mnt'
+    '_runs'
+    'run_manifest.csv'
+    'run_manifest.csv.tmp'
+    'triage_hosts.csv'
+    'triage_rules.csv'
+    'index.html'
+)
+
 function ConvertTo-CollectionName {
     <#
     .SYNOPSIS
@@ -212,4 +226,27 @@ function Assert-UniqueCollectionName {
         "  {0}: {1}" -f $group.Name, (($group.Group | ForEach-Object { $_.Source }) -join ', ')
     }
     throw ("{0} collection name(s) are used by more than one InputRoot entry. Rename the entries so each maps to a unique name:`n{1}" -f $clashes.Count, ($lines -join "`n"))
+}
+
+function Assert-CollectionNameAllowed {
+    <#
+    .SYNOPSIS
+        Fails if a collection name clashes with a file or folder this tool
+        writes under OutputRoot.
+    .DESCRIPTION
+        Compared case-insensitively. The operator renames the entry.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Collections
+    )
+
+    $bad = @($Collections | Where-Object { $script:ReservedCollectionNames -contains $_.Collection })
+    if ($bad.Count -eq 0) {
+        return
+    }
+    $names = ($bad | ForEach-Object { "$($_.Source) -> $($_.Collection)" }) -join ', '
+    throw ("{0} InputRoot entr(ies) map to a name reserved for this tool's own output: {1}. Rename them. Reserved: {2}" -f $bad.Count, $names, ($script:ReservedCollectionNames -join ', '))
 }

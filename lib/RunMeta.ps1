@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 2
+$script:RunMetaSchemaVersion = 3
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -7,7 +7,10 @@ $script:RunMetaJsonDepth = 10
 function Get-RunMetaPath {
     <#
     .SYNOPSIS
-        Returns OutputRoot\_runs\run_meta_<utc-stamp>.json for a run.
+        Returns OutputRoot\_runs\run_meta_<utc-stamp>_<RunId>.json for a run.
+    .DESCRIPTION
+        The RunId makes the name unique even for two runs started in the
+        same second, and matches the RunId column in the manifest.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -16,12 +19,15 @@ function Get-RunMetaPath {
         [string]$OutputRoot,
 
         [Parameter(Mandatory)]
-        [datetime]$StartedUtc
+        [datetime]$StartedUtc,
+
+        [Parameter(Mandatory)]
+        [string]$RunId
     )
 
     $stamp = $StartedUtc.ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
     $runsDir = Join-Path -Path $OutputRoot -ChildPath '_runs'
-    return (Join-Path -Path $runsDir -ChildPath "run_meta_$stamp.json")
+    return (Join-Path -Path $runsDir -ChildPath "run_meta_$($stamp)_$RunId.json")
 }
 
 function New-RunMeta {
@@ -29,10 +35,10 @@ function New-RunMeta {
     .SYNOPSIS
         Builds the provenance record for one run.
     .DESCRIPTION
-        Hayabusa.Version and Hayabusa.RulesVersion stay null until the
-        binary is invoked. Every other field is filled from the resolved
-        settings and the collections discovered for this run. Nothing is
-        written to disk here.
+        Filled from the resolved settings, the collections discovered for
+        this run, the output of hayabusa --version stored verbatim, and the
+        rule set's newest file and count. CompletedUtc and Summary are set
+        when the batch finishes. Nothing is written to disk here.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
     [CmdletBinding()]
@@ -66,6 +72,12 @@ function New-RunMeta {
         [AllowEmptyCollection()]
         [object[]]$Collections,
 
+        [Parameter(Mandatory)]
+        [pscustomobject]$HayabusaVersion,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$RulesVersion,
+
         [AllowNull()]
         [object]$Threads,
 
@@ -86,6 +98,7 @@ function New-RunMeta {
         RunId           = $RunId
         StartedUtc      = $StartedUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         CompletedUtc    = $null
+        Summary         = $null
         Tool            = [ordered]@{
             Name              = 'Invoke-BulkHayabusa'
             Version           = $ToolVersion
@@ -96,10 +109,14 @@ function New-RunMeta {
         OutputRoot      = $OutputRoot
         Config          = $configRecord
         Hayabusa        = [ordered]@{
-            Path         = $HayabusaPath
-            Version      = $null
-            RulesPath    = $Resolved.Selection.RulesPath
-            RulesVersion = $null
+            Path              = $HayabusaPath
+            Version           = $HayabusaVersion.Version
+            VersionOutput     = @($HayabusaVersion.Output)
+            VersionError      = $HayabusaVersion.Error
+            RulesPath         = $Resolved.Selection.RulesPath
+            RulesVersion      = $RulesVersion.Summary
+            NewestRuleFileUtc = $RulesVersion.NewestRuleFileUtc
+            RuleFileCount     = $RulesVersion.RuleFileCount
         }
         Selection       = $Resolved.Selection
         Limits          = $Resolved.Limits

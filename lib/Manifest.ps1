@@ -156,7 +156,7 @@ function New-RunManifestRow {
         [string]$InputType,
 
         [Parameter(Mandatory)]
-        [ValidateSet('Pending', 'Running', 'Completed', 'Failed', 'Skipped')]
+        [ValidateSet('Pending', 'Running', 'Completed', 'CompletedWithErrors', 'Failed', 'Skipped')]
         [string]$Status,
 
         [AllowEmptyString()]
@@ -270,7 +270,7 @@ function Set-RunManifestEntry {
         [string]$InputType,
 
         [Parameter(Mandatory)]
-        [ValidateSet('Pending', 'Running', 'Completed', 'Failed', 'Skipped')]
+        [ValidateSet('Pending', 'Running', 'Completed', 'CompletedWithErrors', 'Failed', 'Skipped')]
         [string]$Status,
 
         [AllowEmptyString()]

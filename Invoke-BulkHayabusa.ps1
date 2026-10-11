@@ -12,8 +12,13 @@
 
     Each top-level entry of InputRoot is a collection. Folders, .zip, .vhd
     and .vhdx are collections. Everything else is skipped. Collections are
-    recorded in OutputRoot\run_manifest.csv, keyed by collection name, and
-    every run writes a provenance record to OutputRoot\_runs.
+    run one at a time, each into OutputRoot\<Collection>, and recorded in
+    OutputRoot\run_manifest.csv keyed by collection name. Every run writes
+    a provenance record to OutputRoot\_runs.
+
+    A collection already Completed or CompletedWithErrors is skipped on a
+    rerun unless -Force is given. One collection failing is recorded and
+    the run moves on to the next.
 
     Settings are resolved in this order: command line, then the config file
     given by -ConfigPath, then built-in defaults.
@@ -36,7 +41,7 @@
     Thread count passed to Hayabusa. Omit to let Hayabusa decide.
 
 .PARAMETER Force
-    Reprocess hosts that already have output.
+    Rerun collections already recorded as Completed or CompletedWithErrors.
 
 .PARAMETER KeepArtifacts
     Keep extracted or mounted content after each host finishes, for
@@ -83,10 +88,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ToolVersion = '0.1.0'
+$ToolVersion = '0.3.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve')) {
+foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -122,10 +127,23 @@ if ($PSBoundParameters.ContainsKey('Threads')) {
 # mounted or written until the checks below pass.
 $collections = @(Get-InputCollection -InputRoot $InputRoot)
 Assert-UniqueCollectionName -Collections $collections
+Assert-CollectionNameAllowed -Collections $collections
 Write-Verbose "Discovered $($collections.Count) collection(s)."
 
 # Fail before anything is written if disk images need an elevated session.
 Assert-ElevationForContainer -Collections $collections
+
+if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
+    throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
+}
+
+# Provenance for run-meta. A failed --version call is recorded, not fatal.
+$hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
+if ($null -ne $hayabusaVersion.Error) {
+    Write-Warning "Could not read the Hayabusa version: $($hayabusaVersion.Error)"
+}
+$rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
+Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
 
 # Run setup
 if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
@@ -151,22 +169,34 @@ $runMeta = New-RunMeta `
     -Resolved $resolved `
     -Config $config `
     -Collections $collections `
+    -HayabusaVersion $hayabusaVersion `
+    -RulesVersion $rulesVersion `
     -Threads $threadsValue `
     -Force $Force.IsPresent `
     -KeepArtifacts $KeepArtifacts.IsPresent
 
-$runMetaPath = Get-RunMetaPath -OutputRoot $OutputRoot -StartedUtc $startedUtc
+$runMetaPath = Get-RunMetaPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId
 Save-RunMeta -Path $runMetaPath -RunMeta $runMeta | Out-Null
 
 Write-Verbose "RunId $runId"
 Write-Verbose "Manifest: $manifestPath"
 Write-Verbose "Run metadata: $runMetaPath"
 
-Write-Warning 'Hayabusa processing is not implemented yet. Collections were discovered and recorded only.'
+$batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
+    -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
+    -Force:$Force -KeepArtifacts:$KeepArtifacts
+
+$runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$runMeta['Summary'] = $batch
+Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
+
+Write-Verbose ("Done. {0} processed: {1} completed, {2} completed with errors, {3} failed. {4} skipped." -f
+    $batch.Processed, $batch.Completed, $batch.CompletedWithErrors, $batch.Failed, $batch.Skipped)
 
 [pscustomobject]@{
     RunId        = $runId
     ManifestPath = $manifestPath
     RunMetaPath  = $runMetaPath
+    Summary      = $batch
     Collections  = $collections
 }
