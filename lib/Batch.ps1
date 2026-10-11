@@ -1,27 +1,6 @@
 # Rows in these states are not run again unless -Force is given.
 $script:FinishedStatuses = @('Completed', 'CompletedWithErrors')
 
-function Get-CollectionOutputPath {
-    # Per-host output folder and file names under OutputRoot\<Collection>.
-    [CmdletBinding()]
-    [OutputType([pscustomobject])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$OutputRoot,
-
-        [Parameter(Mandatory)]
-        [string]$Collection
-    )
-
-    $dir = Join-Path -Path $OutputRoot -ChildPath $Collection
-    [pscustomobject]@{
-        Directory = $dir
-        Csv       = Join-Path -Path $dir -ChildPath "$($Collection)_timeline.csv"
-        Html      = Join-Path -Path $dir -ChildPath "$($Collection)_report.html"
-        Log       = Join-Path -Path $dir -ChildPath "$($Collection)_hayabusa.log"
-    }
-}
-
 function Invoke-CollectionRun {
     <#
     .SYNOPSIS

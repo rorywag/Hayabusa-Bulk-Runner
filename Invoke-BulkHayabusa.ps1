@@ -20,6 +20,11 @@
     rerun unless -Force is given. One collection failing is recorded and
     the run moves on to the next.
 
+    When the batch finishes, the cross-host rollup is rebuilt:
+    triage_rules.csv, triage_hosts.csv and index.html under OutputRoot.
+    Invoke-HayabusaRollup.ps1 rebuilds the same files from an existing
+    OutputRoot without rerunning anything.
+
     Settings are resolved in this order: command line, then the config file
     given by -ConfigPath, then built-in defaults.
 
@@ -88,10 +93,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ToolVersion = '0.3.0'
+$ToolVersion = '0.4.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch')) {
+foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -186,8 +191,25 @@ $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifes
     -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
     -Force:$Force -KeepArtifacts:$KeepArtifacts
 
+# A rollup failure is recorded and reported, and never hides the batch
+# results already in the manifest.
+$rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Index = $null; HostCount = $null; RuleCount = $null; Error = $null }
+try {
+    $rollup = Invoke-Rollup -OutputRoot $OutputRoot
+    $rollupRecord.HostsCsv = $rollup.HostsCsv
+    $rollupRecord.RulesCsv = $rollup.RulesCsv
+    $rollupRecord.Index = $rollup.Index
+    $rollupRecord.HostCount = $rollup.HostCount
+    $rollupRecord.RuleCount = $rollup.RuleCount
+}
+catch {
+    $rollupRecord.Error = $_.Exception.Message
+    Write-Warning "Rollup failed: $($_.Exception.Message). Rebuild it with Invoke-HayabusaRollup.ps1 -OutputRoot $OutputRoot"
+}
+
 $runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $runMeta['Summary'] = $batch
+$runMeta['Rollup'] = $rollupRecord
 Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
 
 Write-Verbose ("Done. {0} processed: {1} completed, {2} completed with errors, {3} failed. {4} skipped." -f
@@ -198,5 +220,6 @@ Write-Verbose ("Done. {0} processed: {1} completed, {2} completed with errors, {
     ManifestPath = $manifestPath
     RunMetaPath  = $runMetaPath
     Summary      = $batch
+    Rollup       = $rollupRecord
     Collections  = $collections
 }

@@ -7,9 +7,41 @@ $script:MaxComputersListed = 20
 # Columns the minimal parse needs from the standard profile.
 $script:RequiredResultColumns = @('Level', 'Computer')
 
-# Hayabusa may write levels in short or full form, so both are accepted.
-$script:CriticalLevels = @('crit', 'critical')
-$script:HighLevels = @('high')
+# Hayabusa may write levels in short or full form. Both map to the full word.
+$script:LevelAliases = @{
+    'crit'          = 'critical'
+    'critical'      = 'critical'
+    'high'          = 'high'
+    'med'           = 'medium'
+    'medium'        = 'medium'
+    'low'           = 'low'
+    'info'          = 'informational'
+    'informational' = 'informational'
+}
+
+function ConvertTo-SeverityName {
+    <#
+    .SYNOPSIS
+        Normalises a Hayabusa Level value to critical, high, medium, low or
+        informational.
+    .DESCRIPTION
+        Case-insensitive. A value that is not a known level is returned
+        lowercased and trimmed, so it is kept rather than dropped.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Level
+    )
+
+    $key = ([string]$Level).Trim().ToLowerInvariant()
+    if ($script:LevelAliases.ContainsKey($key)) {
+        return $script:LevelAliases[$key]
+    }
+    return $key
+}
 
 function Get-CsvHeader {
     [CmdletBinding()]
@@ -82,11 +114,11 @@ function Get-HayabusaResultSummary {
 
     Import-Csv -LiteralPath $CsvPath -Encoding UTF8 | ForEach-Object {
         $total++
-        $level = ([string]$_.Level).Trim().ToLowerInvariant()
-        if ($script:CriticalLevels -contains $level) {
+        $level = ConvertTo-SeverityName -Level $_.Level
+        if ($level -eq 'critical') {
             $critical++
         }
-        elseif ($script:HighLevels -contains $level) {
+        elseif ($level -eq 'high') {
             $high++
         }
 

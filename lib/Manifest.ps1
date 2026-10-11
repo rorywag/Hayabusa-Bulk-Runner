@@ -71,6 +71,35 @@ function Initialize-RunManifest {
         return $Path
     }
 
+    Assert-RunManifestHeader -Path $Path -HeaderLine $first
+    Write-Verbose "Using existing run manifest: $Path"
+    return $Path
+}
+
+function Assert-RunManifestHeader {
+    <#
+    .SYNOPSIS
+        Fails if a manifest's header does not match the expected columns.
+    .DESCRIPTION
+        Read-only. Used before appending to a manifest and before building
+        a rollup from one.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [string]$HeaderLine
+    )
+
+    $first = $HeaderLine
+    if (-not $PSBoundParameters.ContainsKey('HeaderLine')) {
+        $first = Get-Content -LiteralPath $Path -TotalCount 1 -Encoding UTF8
+    }
+    if ($null -eq $first) {
+        $first = ''
+    }
+
     $found = @($first.TrimStart([char]0xFEFF).Split(',') | ForEach-Object { $_.Trim().Trim('"') })
     $expected = $script:ManifestColumns
     $headerOk = ($found.Count -eq $expected.Count)
@@ -87,9 +116,6 @@ function Initialize-RunManifest {
         throw ("Existing run manifest has unexpected columns: {0}`n" +
             "Expected: {1}`nMove or rename {2} and rerun.") -f ($found -join ','), ($expected -join ','), $Path
     }
-
-    Write-Verbose "Using existing run manifest: $Path"
-    return $Path
 }
 
 function Get-RunManifest {

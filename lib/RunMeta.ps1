@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 3
+$script:RunMetaSchemaVersion = 4
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -37,8 +37,8 @@ function New-RunMeta {
     .DESCRIPTION
         Filled from the resolved settings, the collections discovered for
         this run, the output of hayabusa --version stored verbatim, and the
-        rule set's newest file and count. CompletedUtc and Summary are set
-        when the batch finishes. Nothing is written to disk here.
+        rule set's newest file and count. CompletedUtc, Summary and Rollup
+        are set when the batch and rollup finish. Nothing is written to disk here.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
     [CmdletBinding()]
@@ -99,6 +99,7 @@ function New-RunMeta {
         StartedUtc      = $StartedUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         CompletedUtc    = $null
         Summary         = $null
+        Rollup          = $null
         Tool            = [ordered]@{
             Name              = 'Invoke-BulkHayabusa'
             Version           = $ToolVersion

@@ -19,8 +19,11 @@ $script:ReservedCollectionNames = @(
     'run_manifest.csv'
     'run_manifest.csv.tmp'
     'triage_hosts.csv'
+    'triage_hosts.csv.tmp'
     'triage_rules.csv'
+    'triage_rules.csv.tmp'
     'index.html'
+    'index.html.tmp'
 )
 
 function ConvertTo-CollectionName {
