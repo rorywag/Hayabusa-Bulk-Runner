@@ -91,6 +91,20 @@ D:\Cases\Case01\
 
 Always rerun into the same OutputRoot. The manifest in it is what lets a rerun skip the hosts already done and pick up the rest, so adding a late host, or a ZIP you've extracted by hand, is just the same command again. Pointing a rerun at a new folder starts the whole case from scratch.
 
+## Screenshots
+
+The dashboard after a run over eight hosts, with the severity floor at medium:
+
+![Triage dashboard: severity totals, the top rules, every rule that fired and the hosts it fired on, then one row per host, worst first](docs/images/dashboard.png)
+
+*Synthetic sample data. Every host, rule and detection in it is made up.*
+
+The console during the same run:
+
+![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
+
+*Synthetic sample data, from the same made-up run.*
+
 ## Input model
 
 Each top-level entry in InputRoot is one collection, normally one host:
