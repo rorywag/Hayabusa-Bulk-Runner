@@ -6,7 +6,36 @@ Hayabusa is excellent on one host. It has no batch mode, no per-host output spli
 
 ## Status
 
-Pre-release. It's been run against real Hayabusa 4.1.0 and real KAPE output on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Some behaviour still needs confirming on Windows.
+Pre-release. It's been run against real Hayabusa 4.1.0 and real KAPE output on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Some behaviour still needs confirming on Windows, listed below. Check that list before relying on a result in a report.
+
+### Not yet confirmed on Windows
+
+Disk images and mounting:
+
+- Volume checks on `\\?\Volume{...}\` paths under Windows PowerShell 5.1, when an image has more than one volume.
+- diskpart, run from Windows PowerShell 5.1, creating the differencing disk and returning a usable exit code, for a `.vhd` as well as a `.vhdx`.
+- The mounted differencing disk reliably getting a drive letter, and how long that takes. The tool waits up to 10 seconds for a volume and 3 more for a letter.
+- The `_mnt` folder fallback, used when there's no drive letter: that it works, that Hayabusa accepts the folder path as `-d`, and that teardown removes it.
+- The differencing disk deleting straight after dismount, with no lingering lock.
+
+ZIPs:
+
+- Whether KAPE's own ZIP container uses Stored or Deflate. If it doesn't, the tool says so at the start of the run and tells you to extract it first.
+- How Windows PowerShell 5.1 handles a ZIP whose header understates an entry's size. PowerShell 7 stops reading at the declared size. On 5.1 the tool's own byte count should stop it.
+
+Hayabusa 4.1.0:
+
+- Every flag the tool passes: `dfir-timeline`, `-d`, `-w`, `-K`, `-p`, `-U`, `-t csv`, `-o`, `-H`, `-s`, `-X`, `-C`, `-r`, `-m`, `-e`, `--threads`, `--include-tag`, `--exclude-tag`, `--timeline-start`, `--timeline-end`.
+- `--include-tag` and `--exclude-tag` taking one comma-separated value.
+- `--timeline-start` and `--timeline-end` accepting the `yyyy-MM-dd HH:mm:ss +00:00` form the config file requires.
+- The exact Level strings in the CSV, emergency in particular. Short and full forms are both accepted until this is known.
+- What a run with no detections writes: a header-only CSV, no CSV, or something else.
+- Which exit codes Hayabusa uses, and whether a run with partial errors exits non-zero but still writes a CSV.
+
+Windows PowerShell 5.1:
+
+- Passing the argument list correctly, including a drive root such as `-d X:\` and paths with spaces.
+- The per-host log being readable UTF-8, and Hayabusa's stderr output not stopping the run.
 
 ## Requirements
 
