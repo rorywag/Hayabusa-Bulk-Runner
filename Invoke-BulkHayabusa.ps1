@@ -56,18 +56,19 @@
     Rerun collections already recorded as Completed or CompletedWithErrors.
 
 .PARAMETER KeepArtifacts
-    Keep extracted or mounted content after each host finishes, for
-    debugging. Off by default.
+    Keep the extracted ZIP and the differencing disk after each host
+    finishes, for debugging. Disk images are always dismounted. Off by
+    default.
 
 .PARAMETER ConfigPath
     Optional engagement config file (.psd1). Loaded as data only with
     Import-PowerShellDataFile. See config\engagement.example.psd1.
 
 .EXAMPLE
-    .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+    .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 
 .EXAMPLE
-    .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Case\engagement.psd1 -MinLevel medium
+    .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
 #>
 [CmdletBinding()]
 param(

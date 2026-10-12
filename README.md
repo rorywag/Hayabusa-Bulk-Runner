@@ -2,7 +2,7 @@
 
 A PowerShell wrapper that runs [Hayabusa](https://github.com/Yamato-Security/hayabusa) across a folder of KAPE collections, one run per host, and rolls the results up into a single cross-host triage view.
 
-Hayabusa is excellent on one host. It has no batch mode, no per-host output split and no cross-host summary, so with forty hosts you end up running it forty times and stitching the results together by hand. This does that part. Point it at a folder with one entry per host and you get, for each host, Hayabusa's HTML alert report, a CSV timeline and a log, plus a dashboard showing which hosts are worst and which rules fired where.
+Hayabusa already takes a whole directory with `-d`, and its HTML summary breaks the results down by computer. A folder of KAPE collections still leaves two jobs to do by hand. Each ZIP has to be extracted and each disk image mounted before Hayabusa can read it, and a run over all of them gives one combined output, with no report or timeline of its own for each host. This does that part. Point it at a folder with one entry per host and you get, for each host, Hayabusa's HTML alert report, a CSV timeline and a log, plus a dashboard showing which hosts are worst and which rules fired where.
 
 ## Status
 
@@ -18,10 +18,20 @@ Each of these depends on something the test data didn't have:
 
 ## Requirements
 
-- Windows. Hayabusa and the disk image mounting are Windows-only. The rollup can be rebuilt anywhere PowerShell runs.
+- Windows. This tool runs Hayabusa and mounts disk images on Windows only. The rollup can be rebuilt anywhere PowerShell runs.
 - Windows PowerShell 5.1 or PowerShell 7.
 - Hayabusa 4.1.0 with its rules. Run `hayabusa.exe update-rules` once at the start of the engagement and leave the rules alone until it's finished, so every host is checked against the same set.
 - An elevated session if any collection is a disk image, including a disk image inside a ZIP.
+
+## Getting it
+
+Clone the repository, or download it as a ZIP from GitHub and extract it:
+
+```powershell
+git clone https://github.com/rorywag/Hayabusa-Bulk-Runner.git
+```
+
+Keep the `lib` folder beside the two scripts, since they load everything from it. Windows marks files from a downloaded ZIP as coming from the internet. The Process-scope execution policy shown below already allows them, so there's nothing to unblock.
 
 ## Quick start
 
@@ -95,7 +105,7 @@ Everything else is skipped. KAPE's own `_ConsoleLog.txt`, `_CopyLog.csv` and `_S
 
 Each entry gets a collection name, used for its output folder: the entry name without the container extension, with anything outside `A-Z a-z 0-9 . _ -` replaced by `_`. Two entries that end up with the same name, say `HOST01` and `host01.zip`, stop the run before anything is written, and you rename one.
 
-The collection name isn't the host name. KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection whose results hold more than one `Computer` value shows as `[multiple]` with a count of each, rather than quietly picking one. A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
+The collection name isn't the host name. KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection whose results hold more than one `Computer` value shows as `[multiple]` in the manifest, with a count of each, rather than quietly picking one. A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
 
 Things that trip people up, and get a warning:
 
@@ -127,9 +137,9 @@ So: extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot
 
 If the check can't make sense of a ZIP at all, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
 
-ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits (100 GB and 250:1 by default, both configurable). Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
+ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits. The defaults are 100 GB and 250:1, and both can be changed in the engagement config. Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
 
-Deep paths are fine. KAPE output can run past Windows' 260-character path limit, for example the crash reports under `C\ProgramData\Microsoft\Windows\WER\ReportArchive`. The tool writes, lists and removes the extract through Windows' extended-length paths, so those extract like anything else. If a path still can't be created, that collection fails with a message saying so. The fix is a shorter OutputRoot, such as `D:\Out`, or extracting the ZIP yourself nearer the drive root.
+Deep paths are fine. KAPE output can run past Windows' 260-character path limit, for example the crash reports under `C\ProgramData\Microsoft\Windows\WER\ReportArchive`. The tool writes, lists and removes the extract through Windows' extended-length paths, so those extract like anything else. If a path still can't be created, that collection fails with a message saying so. For a long path the fix is a shorter OutputRoot, such as `D:\Out`, or extracting the ZIP yourself nearer the drive root. A single name over 255 characters can't be created anywhere on Windows, so extract that ZIP yourself with a tool that can shorten or skip the entry, put the extracted folder in InputRoot, and rerun.
 
 ## Disk images and elevation
 
@@ -144,7 +154,7 @@ The evidence is only ever read.
 - ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
 - After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point, and the tool only deletes inside its own `_work`, `_mnt` and `_diff` folders. If a dismount fails, everything after it is left in place and the error says what's still there.
 - OutputRoot can't be inside InputRoot, so output never lands next to the evidence.
-- Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out (see Outputs).
+- Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out. The Outputs section has the detail.
 
 ## Outputs
 
@@ -165,8 +175,6 @@ The dashboard is rule-first: a summary of totals by severity and the top rules, 
 
 A collection whose results name more than one computer shows those names as its host in the dashboard and `triage_hosts.csv`, up to three of them and then `+N` for the rest, for example `WS01, WS01.corp.local`. The dashboard tags it "multiple" and its notes list every name with its count. A severity tile with nothing in it is greyed out, so the levels that did fire stand out.
 
-Earlier versions called the dashboard `index.html`. A rerun into an older OutputRoot writes `triage_dashboard.html` and leaves the old `index.html` alone. Delete it by hand.
-
 Values a spreadsheet would treat as a formula, anything starting with `=`, `+`, `-`, `@`, a tab or a carriage return, get a leading `'` in the triage CSVs and the manifest, so opening them in Excel can't run anything. The tool strips that `'` again when it reads its own manifest back.
 
 Severity follows Hayabusa's six levels: emergency, critical, high, medium, low, informational. One emergency outranks any number of criticals.
@@ -178,7 +186,7 @@ Some folders under OutputRoot belong to the tool:
 | Folder | What it's for |
 |---|---|
 | `_runs` | One provenance record per run, never overwritten. Together they show what every row in the manifest was produced with |
-| `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, so after a clean run this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
+| `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, unless `-KeepArtifacts` is given, so after a clean run without it this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
 | `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
 | `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
@@ -206,14 +214,14 @@ To rebuild the triage files and dashboard from an existing OutputRoot without re
 
 Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](config/engagement.example.psd1) and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits. Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
 
-It's read as data only, so it can't run code. Unknown keys are rejected, so a typo can't silently drop a filter. A setting given on the command line wins over the config, which wins over the default, and run-meta records which one each setting came from. Real configs are git-ignored. Only the example is tracked.
+It's read as data only, so it can't run code. Unknown keys are rejected, so a typo can't silently drop a filter. A setting given on the command line wins over the config, which wins over the default, and run-meta records which one each setting came from. Real configs are git-ignored when they're under `config\` or named `engagement*.psd1` or `*.local.*`, and only the example is tracked. A config with any other name elsewhere in the repo, such as `case01.psd1` at the root, would be tracked, so keep it outside the repo or name it to match.
 
 ## Running the tests
 
 The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence. Every fixture is synthetic.
 
 ```powershell
-Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -SkipPublisherCheck
+Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
 Invoke-Pester -Path .\tests
 ```
 
