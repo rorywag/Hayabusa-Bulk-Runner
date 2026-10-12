@@ -30,15 +30,217 @@ function Test-DiskImageName {
     return ($script:DiskImageExtensions -contains $ext.ToLowerInvariant())
 }
 
+# .NET's ZIP reader handles only these compression methods.
+$script:SupportedZipMethods = @(0, 8)
+$script:ZipMethodNames = @{
+    0  = 'Stored'
+    8  = 'Deflate'
+    9  = 'Deflate64'
+    12 = 'BZip2'
+    14 = 'LZMA'
+    93 = 'Zstandard'
+    95 = 'XZ'
+    98 = 'PPMd'
+    99 = 'AES encryption'
+}
+
+# Largest central directory read into memory. Anything bigger is treated as
+# unreadable rather than risking memory on a crafted archive.
+$script:MaxCentralDirectoryBytes = [long]256MB
+
+function Get-ZipMethodName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Method
+    )
+
+    if ($script:ZipMethodNames.ContainsKey($Method)) {
+        return "$Method ($($script:ZipMethodNames[$Method]))"
+    }
+    return "$Method"
+}
+
+function Get-ZipCentralDirectory {
+    <#
+    .SYNOPSIS
+        Reads a ZIP's central directory directly, without .NET's ZIP reader.
+    .DESCRIPTION
+        Returns each entry's name, compression method and general-purpose
+        flags, which ZipArchiveEntry does not expose on .NET Framework. Only
+        bytes are read. Nothing is decompressed.
+
+        Fails safe: any problem parsing the bytes returns Ok = $false with
+        the reason in Error. It never throws and never reports a ZIP it
+        could not fully read as fine. Covers a missing end-of-directory
+        record, bad signatures, offsets or lengths outside the file, a
+        truncated header, an entry count that does not match the headers
+        present, a broken Zip64 locator and a spanned archive.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $result = [pscustomobject]@{
+        Ok      = $false
+        Error   = $null
+        Entries = @()
+    }
+
+    $stream = $null
+    try {
+        $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        $length = [long]$stream.Length
+        if ($length -lt 22) {
+            throw 'file is too short to be a ZIP'
+        }
+
+        # The end-of-central-directory record is in the last 22 to 65557 bytes.
+        $tailLength = [int][math]::Min($length, [long]65557)
+        $tailStart = $length - $tailLength
+        $tail = New-Object byte[] $tailLength
+        [void]$stream.Seek($tailStart, [System.IO.SeekOrigin]::Begin)
+        if ($stream.Read($tail, 0, $tailLength) -ne $tailLength) {
+            throw 'could not read the end of the file'
+        }
+
+        $eocd = -1
+        for ($i = $tailLength - 22; $i -ge 0; $i--) {
+            if ([BitConverter]::ToUInt32($tail, $i) -eq 0x06054b50) {
+                $commentLength = [BitConverter]::ToUInt16($tail, $i + 20)
+                if ($i + 22 + $commentLength -eq $tailLength) {
+                    $eocd = $i
+                    break
+                }
+            }
+        }
+        if ($eocd -lt 0) {
+            throw 'no end-of-central-directory record'
+        }
+
+        $diskNumber = [BitConverter]::ToUInt16($tail, $eocd + 4)
+        $cdDisk = [BitConverter]::ToUInt16($tail, $eocd + 6)
+        if ($diskNumber -ne 0 -or $cdDisk -ne 0) {
+            throw 'spanned or multi-part archive'
+        }
+        [long]$total = [BitConverter]::ToUInt16($tail, $eocd + 10)
+        [long]$cdSize = [BitConverter]::ToUInt32($tail, $eocd + 12)
+        [long]$cdOffset = [BitConverter]::ToUInt32($tail, $eocd + 16)
+        [long]$eocdAbsolute = $tailStart + $eocd
+        [long]$cdLimit = $eocdAbsolute
+
+        # In PowerShell 0xFFFFFFFF is the Int32 -1, so compare with the
+        # unsigned maximum explicitly.
+        [long]$max32 = [uint32]::MaxValue
+        if ($total -eq [uint16]::MaxValue -or $cdSize -eq $max32 -or $cdOffset -eq $max32) {
+            # Zip64: a 20-byte locator sits just before the record.
+            $locator = $eocd - 20
+            if ($locator -lt 0 -or [BitConverter]::ToUInt32($tail, $locator) -ne 0x07064b50) {
+                throw 'Zip64 locator missing or damaged'
+            }
+            [long]$zip64Offset = [long][BitConverter]::ToUInt64($tail, $locator + 8)
+            if ($zip64Offset -lt 0 -or $zip64Offset + 56 -gt $tailStart + $locator) {
+                throw 'Zip64 record offset is outside the file'
+            }
+            $record = New-Object byte[] 56
+            [void]$stream.Seek($zip64Offset, [System.IO.SeekOrigin]::Begin)
+            if ($stream.Read($record, 0, 56) -ne 56 -or [BitConverter]::ToUInt32($record, 0) -ne 0x06064b50) {
+                throw 'Zip64 end-of-central-directory record missing or damaged'
+            }
+            $total = [long][BitConverter]::ToUInt64($record, 32)
+            $cdSize = [long][BitConverter]::ToUInt64($record, 40)
+            $cdOffset = [long][BitConverter]::ToUInt64($record, 48)
+            $cdLimit = $zip64Offset
+        }
+
+        if ($cdOffset -lt 0 -or $cdSize -lt 0 -or $total -lt 0 -or $cdOffset + $cdSize -gt $cdLimit) {
+            throw 'central directory offset or size is outside the file'
+        }
+        if ($cdSize -gt $script:MaxCentralDirectoryBytes) {
+            throw 'central directory is too large to check'
+        }
+        if ($total -gt 0 -and $cdSize -lt 46) {
+            throw 'central directory is smaller than one entry'
+        }
+
+        $cd = New-Object byte[] ([int]$cdSize)
+        [void]$stream.Seek($cdOffset, [System.IO.SeekOrigin]::Begin)
+        $read = 0
+        while ($read -lt $cdSize) {
+            $n = $stream.Read($cd, $read, [int]($cdSize - $read))
+            if ($n -le 0) {
+                throw 'central directory is truncated'
+            }
+            $read += $n
+        }
+
+        $entries = New-Object System.Collections.Generic.List[object]
+        $pos = 0
+        for ($e = 0; $e -lt $total; $e++) {
+            if ($pos + 46 -gt $cdSize) {
+                throw "central directory ends after $e of $total entries"
+            }
+            if ([BitConverter]::ToUInt32($cd, $pos) -ne 0x02014b50) {
+                throw "bad central directory header at entry $e"
+            }
+            $flags = [int][BitConverter]::ToUInt16($cd, $pos + 8)
+            $method = [int][BitConverter]::ToUInt16($cd, $pos + 10)
+            $nameLength = [int][BitConverter]::ToUInt16($cd, $pos + 28)
+            $extraLength = [int][BitConverter]::ToUInt16($cd, $pos + 30)
+            $commentLength = [int][BitConverter]::ToUInt16($cd, $pos + 32)
+            $next = $pos + 46 + $nameLength + $extraLength + $commentLength
+            if ($next -gt $cdSize) {
+                throw "central directory entry $e runs past the directory"
+            }
+            $name = [System.Text.Encoding]::UTF8.GetString($cd, $pos + 46, $nameLength)
+            $entries.Add([pscustomobject]@{
+                    Name      = $name
+                    Method    = $method
+                    Flags     = $flags
+                    Encrypted = (($flags -band 0x41) -ne 0) -or ($method -eq 99)
+                })
+            $pos = $next
+        }
+
+        $result.Entries = $entries.ToArray()
+        $result.Ok = $true
+    }
+    catch {
+        $result.Ok = $false
+        $result.Entries = @()
+        $result.Error = $_.Exception.Message
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+
+    return $result
+}
+
 function Get-ZipEntryInfo {
     <#
     .SYNOPSIS
-        Lists a ZIP's entries from its central directory without extracting.
+        Lists a ZIP's entries and checks it can be extracted, without extracting.
     .DESCRIPTION
         Returns entry counts, declared sizes, and the names of any disk
-        images, evtx files and nested ZIPs inside. An archive that cannot be
-        opened is returned with Readable set to false and the reason in
-        ReadError, so the caller decides what to do with it.
+        images, evtx files and nested ZIPs inside.
+
+        Readability is checked first from the raw central directory. An
+        encrypted entry, or a compression method other than Stored or
+        Deflate, makes the ZIP unreadable (ReadReason Unsupported), since
+        .NET cannot extract it. The rule is the same on Windows PowerShell
+        5.1 and PowerShell 7. A central directory that cannot be parsed is
+        unreadable too (ReadReason Unparseable), never assumed fine. A ZIP
+        that passes but that .NET still cannot open is ReadReason Corrupt.
+
+        Unreadable ZIPs are reported, not thrown, so discovery can guide the
+        operator. Get-ZipGuidance builds the message.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -52,6 +254,7 @@ function Get-ZipEntryInfo {
     $info = [pscustomobject]@{
         Path              = $Path
         Readable          = $false
+        ReadReason        = $null
         ReadError         = $null
         EntryCount        = 0
         UncompressedBytes = [long]0
@@ -61,10 +264,37 @@ function Get-ZipEntryInfo {
         NestedZipEntries  = @()
     }
 
+    $directory = Get-ZipCentralDirectory -Path $Path
+    if (-not $directory.Ok) {
+        $info.ReadReason = 'Unparseable'
+        $info.ReadError = "its central directory could not be read ($($directory.Error))"
+        return $info
+    }
+
+    $images = @($directory.Entries | Where-Object { Test-DiskImageName -Name $_.Name } | ForEach-Object { $_.Name })
+    $bad = @($directory.Entries | Where-Object { $_.Encrypted -or $script:SupportedZipMethods -notcontains $_.Method })
+    if ($bad.Count -gt 0) {
+        $first = $bad[0]
+        if ($first.Encrypted) {
+            $why = "entry '$($first.Name)' is encrypted"
+        }
+        else {
+            $why = "entry '$($first.Name)' uses compression method $(Get-ZipMethodName -Method $first.Method), which .NET cannot extract"
+        }
+        if ($bad.Count -gt 1) {
+            $why += ", and $($bad.Count - 1) more entr(ies) have the same problem"
+        }
+        $info.ReadReason = 'Unsupported'
+        $info.ReadError = $why
+        $info.EntryCount = @($directory.Entries).Count
+        $info.ImageEntries = $images
+        return $info
+    }
+
     $archive = $null
     try {
         $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
-        $images = New-Object System.Collections.Generic.List[string]
+        $imageList = New-Object System.Collections.Generic.List[string]
         $nested = New-Object System.Collections.Generic.List[string]
         $evtx = 0
         $uncompressed = [long]0
@@ -75,7 +305,7 @@ function Get-ZipEntryInfo {
             $compressed += $entry.CompressedLength
             $ext = [System.IO.Path]::GetExtension($entry.FullName).ToLowerInvariant()
             if ($script:DiskImageExtensions -contains $ext) {
-                $images.Add($entry.FullName)
+                $imageList.Add($entry.FullName)
             }
             elseif ($ext -eq '.evtx') {
                 $evtx++
@@ -89,12 +319,15 @@ function Get-ZipEntryInfo {
         $info.EntryCount = $archive.Entries.Count
         $info.UncompressedBytes = $uncompressed
         $info.CompressedBytes = $compressed
-        $info.ImageEntries = $images.ToArray()
+        $info.ImageEntries = $imageList.ToArray()
         $info.EvtxEntryCount = $evtx
         $info.NestedZipEntries = $nested.ToArray()
     }
     catch {
-        $info.ReadError = $_.Exception.Message
+        $info.Readable = $false
+        $info.ReadReason = 'Corrupt'
+        $info.ReadError = ".NET could not open it ($($_.Exception.Message))"
+        $info.ImageEntries = $images
     }
     finally {
         if ($null -ne $archive) {
@@ -103,6 +336,36 @@ function Get-ZipEntryInfo {
     }
 
     return $info
+}
+
+function Get-ZipGuidance {
+    <#
+    .SYNOPSIS
+        Plain guidance for a ZIP this tool cannot extract.
+    .DESCRIPTION
+        When the ZIP is known to hold a disk image, the operator is told to
+        put the extracted image itself in InputRoot, because an image left
+        inside a folder is not mounted and Hayabusa would find nothing.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$Info
+    )
+
+    $images = @($Info.ImageEntries)
+    if ($images.Count -gt 0) {
+        $leaf = ($images | ForEach-Object { ($_ -split '[\\/]')[-1] }) -join ', '
+        $advice = "Extract it yourself and put the extracted disk image ($leaf) directly in InputRoot, then rerun."
+    }
+    else {
+        $advice = 'Extract it yourself, put the extracted folder in InputRoot, and rerun.'
+    }
+    return "$Source can't be extracted by this tool: $($Info.ReadError). $advice"
 }
 
 function Test-ZipEntryName {
@@ -381,6 +644,17 @@ function Expand-ZipArchiveSafe {
     catch {
         if ($created -and (Test-Path -LiteralPath $Destination)) {
             [System.IO.Directory]::Delete($Destination, $true)
+        }
+        # The discovery check should stop these first. If .NET still meets
+        # an unsupported method or an encrypted entry, replace its raw
+        # message with the same guidance.
+        $inner = $_.Exception
+        while ($null -ne $inner.InnerException) {
+            $inner = $inner.InnerException
+        }
+        if ($inner -is [System.IO.InvalidDataException] -and $inner.Message -match '(?i)compress|encrypt|not supported') {
+            $name = [System.IO.Path]::GetFileName($Path)
+            throw "$name can't be extracted by this tool: $($inner.Message). Extract it yourself, put the extracted folder, or the disk image inside it, in InputRoot, and rerun."
         }
         throw
     }

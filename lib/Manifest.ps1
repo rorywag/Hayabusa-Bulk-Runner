@@ -18,6 +18,56 @@ $script:ManifestColumns = @(
     'Timestamp'
 )
 
+# Free-text columns. Host and Warning are built from the evidence's Computer
+# values, Source is the operator's raw entry name, Collection may start with
+# a hyphen, and Error can quote any of them. These are escaped against CSV
+# formula injection on write and unescaped on read. The other columns hold
+# values this tool controls.
+$script:ManifestEscapedColumns = @('Host', 'Collection', 'Source', 'Warning', 'Error')
+
+function ConvertTo-ManifestCell {
+    <#
+    .SYNOPSIS
+        Escapes a manifest cell so a spreadsheet cannot treat it as a formula.
+    .DESCRIPTION
+        A value starting with =, +, -, @, tab or carriage return gets one
+        leading apostrophe, following the OWASP guidance. A value that
+        already starts with an apostrophe gets one too, so reading back
+        with ConvertFrom-ManifestCell is lossless: '=x is written as ''=x
+        and read back as '=x.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $text = [string]$Value
+    if ($text -match "^['=+\-@\t\r]") {
+        return "'" + $text
+    }
+    return $text
+}
+
+function ConvertFrom-ManifestCell {
+    # Reverses ConvertTo-ManifestCell by removing exactly one leading apostrophe.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $text = [string]$Value
+    if ($text.StartsWith("'")) {
+        return $text.Substring(1)
+    }
+    return $text
+}
+
 function Write-Utf8Line {
     # Writes lines as UTF-8 without a BOM. Set-Content in 5.1 adds a BOM and
     # 7.x does not, so this keeps the file identical across both.
@@ -125,7 +175,8 @@ function Get-RunManifest {
         Reads run_manifest.csv into an ordered dictionary keyed by collection.
     .DESCRIPTION
         Collection keys are case-insensitive. If a collection appears more
-        than once the last row wins.
+        than once the last row wins. Free-text cells are unescaped, so the
+        values returned are exactly the values that were written.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -141,6 +192,12 @@ function Get-RunManifest {
     }
 
     foreach ($row in @(Import-Csv -LiteralPath $Path -Encoding UTF8)) {
+        foreach ($column in $script:ManifestEscapedColumns) {
+            $prop = $row.PSObject.Properties[$column]
+            if ($null -ne $prop) {
+                $prop.Value = ConvertFrom-ManifestCell -Value ([string]$prop.Value)
+            }
+        }
         if ([string]::IsNullOrWhiteSpace($row.Collection)) {
             continue
         }
@@ -229,7 +286,8 @@ function Write-RunManifest {
         Writes every manifest row in one atomic save.
     .DESCRIPTION
         Rows go to a temporary file that is then swapped in, so a crash
-        mid-write leaves the previous manifest intact.
+        mid-write leaves the previous manifest intact. Free-text cells are
+        escaped against CSV formula injection on the way out.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -242,7 +300,12 @@ function Write-RunManifest {
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add((Get-ManifestHeaderLine))
-    $rows = @($Entries.Values | Select-Object -Property $script:ManifestColumns)
+    $rows = @($Entries.Values | Select-Object -Property $script:ManifestColumns | ForEach-Object {
+            foreach ($column in $script:ManifestEscapedColumns) {
+                $_.$column = ConvertTo-ManifestCell -Value ([string]$_.$column)
+            }
+            $_
+        })
     if ($rows.Count -gt 0) {
         $csv = $rows | ConvertTo-Csv -NoTypeInformation
         foreach ($line in ($csv | Select-Object -Skip 1)) {

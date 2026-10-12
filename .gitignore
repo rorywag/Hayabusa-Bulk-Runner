@@ -120,3 +120,5 @@ desktop.ini
 # Tracked exceptions. Keep these last so nothing above overrides them.
 # ---------------------------------------------------------------------------
 !config/engagement.example.psd1
+# Synthetic test timelines, nothing from a real host.
+!tests/fixtures/*_timeline.csv

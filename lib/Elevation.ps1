@@ -30,8 +30,10 @@ function Get-CollectionNeedingMount {
     .SYNOPSIS
         Returns the discovered collections that will need a disk image mounted.
     .DESCRIPTION
-        That is every Vhd and Vhdx collection, plus every Zip whose entry
-        list, read without extracting, holds a .vhd or .vhdx at any depth.
+        That is every Vhd and Vhdx collection, plus every readable Zip whose
+        entry list, read without extracting, holds a .vhd or .vhdx at any
+        depth. An unreadable Zip is never extracted, so it never needs a
+        mount.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -45,7 +47,7 @@ function Get-CollectionNeedingMount {
         if ($c.InputType -eq 'Vhd' -or $c.InputType -eq 'Vhdx') {
             [pscustomobject]@{ Collection = $c; Reason = $c.Source }
         }
-        elseif ($c.InputType -eq 'Zip' -and $null -ne $c.Zip -and @($c.Zip.ImageEntries).Count -gt 0) {
+        elseif ($c.InputType -eq 'Zip' -and $null -ne $c.Zip -and $c.Zip.Readable -and @($c.Zip.ImageEntries).Count -gt 0) {
             [pscustomobject]@{ Collection = $c; Reason = "$($c.Source) (contains $(@($c.Zip.ImageEntries) -join ', '))" }
         }
     }

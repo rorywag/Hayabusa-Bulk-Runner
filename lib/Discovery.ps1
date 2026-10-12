@@ -97,7 +97,10 @@ function Get-InputCollection {
         Per-collection warnings are returned on the object so they can be
         recorded in the manifest:
         - a Loose entry that directly contains Windows\System32\winevt\Logs
-        - a ZIP that cannot be read
+        - a Loose entry holding disk image files, which are not mounted
+        - a ZIP this tool cannot extract: encrypted, an unsupported
+          compression method, or a central directory that cannot be read,
+          with guidance to extract it first
         - a ZIP holding more than one disk image
         - a ZIP holding a disk image and loose evtx files, whose loose logs
           will not be processed
@@ -168,10 +171,19 @@ function Get-InputCollection {
             $warnings.Add("Folder directly contains $($script:EventLogRelativePath). If InputRoot points one level too deep, its siblings may not be hosts.")
         }
 
+        if ($type -eq 'Loose') {
+            # A disk image inside a folder is not mounted. Hayabusa only reads
+            # evtx files, so the image would be silently skipped.
+            $innerImages = @(Get-ChildItem -LiteralPath $item.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { Test-DiskImageName -Name $_.Name })
+            if ($innerImages.Count -gt 0) {
+                $warnings.Add("Folder holds disk image file(s) that will not be mounted: $(($innerImages | ForEach-Object { $_.Name }) -join ', '). Put each image directly in InputRoot to have it mounted.")
+            }
+        }
+
         if ($type -eq 'Zip') {
             $zipInfo = Get-ZipEntryInfo -Path $item.FullName
             if (-not $zipInfo.Readable) {
-                $warnings.Add("ZIP could not be read: $($zipInfo.ReadError)")
+                $warnings.Add((Get-ZipGuidance -Source $item.Name -Info $zipInfo))
             }
             else {
                 $imageCount = @($zipInfo.ImageEntries).Count

@@ -1,0 +1,8 @@
+"Timestamp","Computer","Channel","EventID","Level","RecordID","RuleTitle","Details","RuleID"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","crit","1","<script>alert(1)</script>","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","high","1","' onmouseover='x","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","med","1","</td></tr></table><iframe src=//evil.example>","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","low","1","=HYPERLINK(""http://x"",""click"")","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","low","1","@SUM(1+1)","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","low","1","-2+3","d","id"
+"2026-10-01 10:00:00.000 +00:00","""><img src=x onerror=alert(1)>","Sec","4624","info","1","+cmd|'/c calc'!A1","d","id"

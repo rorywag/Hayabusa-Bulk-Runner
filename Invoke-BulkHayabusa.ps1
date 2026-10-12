@@ -136,6 +136,15 @@ Assert-UniqueCollectionName -Collections $collections
 Assert-CollectionNameAllowed -Collections $collections
 Write-Verbose "Discovered $($collections.Count) collection(s)."
 
+# Startup summary of ZIPs this tool cannot extract. They are recorded and
+# reported per collection too, but listed together here so they are seen
+# before a long run starts.
+$unreadableZips = @($collections | Where-Object { $_.InputType -eq 'Zip' -and $null -ne $_.Zip -and -not $_.Zip.Readable })
+if ($unreadableZips.Count -gt 0) {
+    $lines = $unreadableZips | ForEach-Object { '  ' + (Get-ZipGuidance -Source $_.Source -Info $_.Zip) }
+    Write-Warning ("{0} ZIP(s) can't be extracted by this tool and will be recorded as Failed:`n{1}" -f $unreadableZips.Count, ($lines -join "`n"))
+}
+
 # Fail before anything is written if disk images need an elevated session.
 Assert-ElevationForContainer -Collections $collections
 

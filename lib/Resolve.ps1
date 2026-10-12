@@ -285,6 +285,11 @@ function Resolve-CollectionInput {
                 $result.Path = $mount.Path
             }
             'Zip' {
+                # Refused before anything is extracted. Discovery has already
+                # checked the archive and built the guidance.
+                if ($null -ne $Collection.Zip -and -not $Collection.Zip.Readable) {
+                    throw (Get-ZipGuidance -Source $Collection.Source -Info $Collection.Zip)
+                }
                 $extract = Join-Path -Path $workRoot -ChildPath $Collection.Collection
                 Clear-StaleExtract -Path $extract -WorkRoot $workRoot
                 if (-not (Test-Path -LiteralPath $workRoot)) {

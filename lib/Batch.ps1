@@ -56,8 +56,15 @@ function Invoke-CollectionRun {
         $warnings.Add($w)
     }
 
-    Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
-        -RunId $RunId -InputType $Collection.InputType -Status 'Running' -WarningMessage @(Join-UniqueMessage -Message $warnings.ToArray())
+    # A failure to mark the row Running is recorded and the run goes ahead.
+    # The final write below tries again.
+    try {
+        Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
+            -RunId $RunId -InputType $Collection.InputType -Status 'Running' -WarningMessage @(Join-UniqueMessage -Message $warnings.ToArray())
+    }
+    catch {
+        $errors.Add("Could not mark the manifest row Running: $($_.Exception.Message)")
+    }
 
     $paths = Get-CollectionOutputPath -OutputRoot $OutputRoot -Collection $Collection.Collection
     $resolvedInput = $null
@@ -122,25 +129,43 @@ function Invoke-CollectionRun {
     $emergency = 0
     $critical = 0
     $high = 0
-    if ($null -ne $summary) {
-        $detections = $summary.Detections
-        $emergency = $summary.Emergency
-        $critical = $summary.Critical
-        $high = $summary.High
-        $picked = Resolve-HostName -Computers $summary.Computers
-        $hostName = $picked.HostName
-        if ($null -ne $picked.Warning) {
-            $warnings.Add($picked.Warning)
+    $finalWarnings = @()
+
+    # Recording the result is guarded too, so a failure here marks this one
+    # collection Failed and can never stop the batch.
+    try {
+        if ($null -ne $summary) {
+            $detections = $summary.Detections
+            $emergency = $summary.Emergency
+            $critical = $summary.Critical
+            $high = $summary.High
+            $picked = Resolve-HostName -Computers $summary.Computers
+            $hostName = $picked.HostName
+            if ($null -ne $picked.Warning) {
+                $warnings.Add($picked.Warning)
+            }
+        }
+
+        $finalWarnings = @(Join-UniqueMessage -Message $warnings.ToArray())
+
+        Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
+            -RunId $RunId -InputType $Collection.InputType -Status $status -HostName $hostName `
+            -Detections $detections -Emergency $emergency -Critical $critical -High $high `
+            -WarningMessage $finalWarnings -ErrorMessage $errors.ToArray() -DurationSec $timer.Elapsed.TotalSeconds
+    }
+    catch {
+        $errors.Add("Recording the result failed: $($_.Exception.Message)")
+        $status = 'Failed'
+        try {
+            Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
+                -RunId $RunId -InputType $Collection.InputType -Status 'Failed' -ErrorMessage $errors.ToArray() `
+                -DurationSec $timer.Elapsed.TotalSeconds
+        }
+        catch {
+            Write-Warning "$($Collection.Collection): could not record the result in the manifest: $($_.Exception.Message)"
         }
     }
-
     $timer.Stop()
-    $finalWarnings = @(Join-UniqueMessage -Message $warnings.ToArray())
-
-    Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
-        -RunId $RunId -InputType $Collection.InputType -Status $status -HostName $hostName `
-        -Detections $detections -Emergency $emergency -Critical $critical -High $high `
-        -WarningMessage $finalWarnings -ErrorMessage $errors.ToArray() -DurationSec $timer.Elapsed.TotalSeconds
 
     [pscustomobject]@{
         Collection  = $Collection.Collection
@@ -226,8 +251,14 @@ function Invoke-CollectionBatch {
 
         Write-Verbose "[$index/$($Collections.Count)] $($c.Collection): running."
         $summary.Processed++
-        $result = Invoke-CollectionRun -Collection $c -OutputRoot $OutputRoot -HayabusaPath $HayabusaPath `
-            -Resolved $Resolved -Threads $Threads -RunId $RunId -ManifestPath $ManifestPath -KeepArtifacts:$KeepArtifacts
+        try {
+            $result = Invoke-CollectionRun -Collection $c -OutputRoot $OutputRoot -HayabusaPath $HayabusaPath `
+                -Resolved $Resolved -Threads $Threads -RunId $RunId -ManifestPath $ManifestPath -KeepArtifacts:$KeepArtifacts
+        }
+        catch {
+            # Last line of defence: one collection must never abort the run.
+            $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Detections = 0; Errors = @("Unexpected error: $($_.Exception.Message)") }
+        }
         $summary[$result.Status]++
 
         if ($result.Status -eq 'Failed') {

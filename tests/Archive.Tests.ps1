@@ -1,0 +1,186 @@
+BeforeAll {
+    . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
+    $script:zd = New-TestDirectory (Join-TestPath $TestDrive 'zips')
+    function script:New-Plain([string]$Name) {
+        New-TestZip -Path (Join-TestPath $zd $Name) -Entries ([ordered]@{ 'logs/a.evtx' = (New-TestByteArray 300 -Random); 'logs/b.evtx' = (New-TestByteArray 200 -Random) })
+    }
+}
+
+Describe 'Zip slip' {
+    It 'refuses <Case> (<Entry>) and writes nothing' -ForEach @(
+        @{ Case = 'parent'; Entry = '../evil.txt' }
+        @{ Case = 'deep parent'; Entry = 'a/../../evil.txt' }
+        @{ Case = 'backslash parent'; Entry = 'a\..\..\evil.txt' }
+        @{ Case = 'absolute'; Entry = '/abs.txt' }
+        @{ Case = 'UNC'; Entry = '\\server\share\x.txt' }
+        @{ Case = 'drive'; Entry = 'C:/x.txt' }
+        @{ Case = 'alternate data stream'; Entry = 'file.txt:hidden' }
+        @{ Case = 'device folder'; Entry = 'CON/x.txt' }
+        @{ Case = 'device name'; Entry = 'logs/aux.evtx' }
+        @{ Case = 'wildcard'; Entry = 'bad?.txt' }
+        @{ Case = 'trailing dot'; Entry = 'trail./x.txt' }
+    ) {
+        $zp = New-TestZip -Path (Join-TestPath $zd ("slip{0}.zip" -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ 'ok/fine.evtx' = (New-TestByteArray 10 -Random); $Entry = (New-TestByteArray 10 -Random) })
+        $dest = Join-TestPath $zd ('x' + [guid]::NewGuid().ToString('N'))
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeLike '*unsafe entry name*'
+        Test-Path -LiteralPath $dest | Should -BeFalse
+        Test-Path -LiteralPath (Join-TestPath $TestDrive 'evil.txt') | Should -BeFalse
+    }
+    It 'passes ordinary names' {
+        Test-ZipEntryName -Name 'C/Windows/System32/winevt/Logs/Microsoft-Windows-Sysmon%4Operational.evtx' | Should -BeNullOrEmpty
+        Test-ZipEntryName -Name './a/b.evtx' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Zip bomb' {
+    It 'refuses an archive over the ratio cap, and extracts it with a raised cap' {
+        $zp = New-TestZip -Path (Join-TestPath $zd 'ratio.zip') -Entries ([ordered]@{ 'zeros.bin' = (New-TestByteArray (20MB)) })
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'r') -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeLike '*compression ratio*over the cap*ZipMaxRatio*'
+        Test-Path -LiteralPath (Join-TestPath $zd 'r') | Should -BeFalse
+        Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'r2') -MaxUncompressedBytes 1GB -MaxRatio 100000 | Should -Be (20MB)
+        (Get-Item -LiteralPath (Join-TestPath $zd 'r2' 'zeros.bin')).Length | Should -Be (20MB)
+    }
+    It 'refuses an archive over the size cap' {
+        $zp = New-TestZip -Path (Join-TestPath $zd 'size.zip') -Entries ([ordered]@{ 'rand.bin' = (New-TestByteArray (2MB) -Random) })
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 's') -MaxUncompressedBytes 1MB -MaxRatio 250 } | Should -BeLike '*declared uncompressed size*over the cap*ZipMaxUncompressedGB*'
+    }
+    It 'never writes past the declared size when a header understates it' {
+        $data = New-Object byte[] (2MB)
+        for ($i = 0; $i -lt $data.Length; $i++) { $data[$i] = [byte](65 + (($i -shr 10) % 2)) }
+        $zp = New-TestZip -Path (Join-TestPath $zd 'lie.zip') -Entries ([ordered]@{ 'big.bin' = $data })
+        Edit-ZipHeader -Path $zp -DeclaredSize 1000
+        $dest = Join-TestPath $zd 'l'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 1000000 }
+        if ($null -eq $m) {
+            # The runtime stopped reading at the declared size.
+            (Get-Item -LiteralPath (Join-TestPath $dest 'big.bin')).Length | Should -Be 1000
+        }
+        else {
+            # The byte counter stopped it and removed the partial extract.
+            $m | Should -BeLike '*expanded past its declared size*'
+            Test-Path -LiteralPath $dest | Should -BeFalse
+        }
+    }
+}
+
+Describe 'Free space' {
+    It 'refuses extraction when there is not enough room' {
+        Mock Get-FreeSpace { [long]1 }
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path (New-Plain 'fs.zip') -Destination (Join-TestPath $zd 'fs') -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeLike '*Not enough free space*'
+    }
+    It 'warns and extracts when free space cannot be read' {
+        Mock Get-FreeSpace { $null }
+        $w = $null
+        Expand-ZipArchiveSafe -Path (New-Plain 'fs2.zip') -Destination (Join-TestPath $zd 'fs2') -MaxUncompressedBytes 1GB -MaxRatio 250 -WarningVariable w -WarningAction SilentlyContinue | Out-Null
+        @($w | Where-Object { "$_" -like '*without a free space check*' }).Count | Should -Be 1
+        Test-Path -LiteralPath (Join-TestPath $zd 'fs2' 'logs' 'a.evtx') | Should -BeTrue
+    }
+    It 'reads real free space' {
+        Get-FreeSpace -Path $TestDrive | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Zip readability' {
+    It 'reads a plain Deflate zip as readable' {
+        $i = Get-ZipEntryInfo -Path (New-Plain 'plain.zip')
+        $i.Readable | Should -BeTrue
+        $i.EntryCount | Should -Be 2
+        $i.EvtxEntryCount | Should -Be 2
+    }
+    It 'reads the central directory of a plain zip' {
+        $d = Get-ZipCentralDirectory -Path (New-Plain 'cd.zip')
+        $d.Ok | Should -BeTrue
+        @($d.Entries).Count | Should -Be 2
+        @($d.Entries | ForEach-Object { $_.Method } | Sort-Object -Unique) | Should -Be @(8)
+    }
+    It 'marks compression method <Method> unsupported' -ForEach @(
+        @{ Method = 9; Name = 'Deflate64' }, @{ Method = 12; Name = 'BZip2' }, @{ Method = 14; Name = 'LZMA' }, @{ Method = 93; Name = 'Zstandard' }, @{ Method = 77; Name = '77' }
+    ) {
+        $zp = New-Plain ("m$Method.zip")
+        Edit-ZipHeader -Path $zp -Method $Method
+        $i = Get-ZipEntryInfo -Path $zp
+        $i.Readable | Should -BeFalse
+        $i.ReadReason | Should -Be 'Unsupported'
+        $i.ReadError | Should -BeLike "*uses compression method $Method*which .NET cannot extract*and 1 more*"
+        if ($Name -ne '77') { $i.ReadError | Should -BeLike "*($Name)*" }
+    }
+    It 'marks AES (method 99) and encrypted entries unsupported' {
+        $aes = New-Plain 'aes.zip'; Edit-ZipHeader -Path $aes -Method 99
+        (Get-ZipEntryInfo -Path $aes).ReadError | Should -BeLike "*entry 'logs/a.evtx' is encrypted*"
+        $enc = New-Plain 'enc.zip'; Edit-ZipHeader -Path $enc -Flags 1
+        $i = Get-ZipEntryInfo -Path $enc
+        $i.Readable | Should -BeFalse
+        $i.ReadError | Should -BeLike '*is encrypted*'
+        $strong = New-Plain 'strong.zip'; Edit-ZipHeader -Path $strong -Flags 0x40
+        (Get-ZipEntryInfo -Path $strong).Readable | Should -BeFalse
+    }
+    It 'reads a Zip64 archive' {
+        $zp = Join-TestPath $zd 'zip64.zip'
+        $fs = [System.IO.File]::Open($zp, [System.IO.FileMode]::CreateNew)
+        $z = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+        foreach ($n in 1..3) { $e = $z.CreateEntry("f$n.evtx"); $s = $e.Open(); $s.WriteByte(1); $s.Dispose() }
+        $z.Dispose(); $fs.Dispose()
+        # Rewrite the end record as Zip64: insert a Zip64 record and locator.
+        $b = [System.IO.File]::ReadAllBytes($zp)
+        $eocd = $b.Length - 22
+        $cdSize = [BitConverter]::ToUInt32($b, $eocd + 12); $cdOffset = [BitConverter]::ToUInt32($b, $eocd + 16)
+        $ms = New-Object System.IO.MemoryStream
+        $ms.Write($b, 0, $eocd)
+        $z64At = $ms.Position
+        $rec = New-Object byte[] 56
+        [BitConverter]::GetBytes([uint32]0x06064b50).CopyTo($rec, 0); [BitConverter]::GetBytes([uint64]44).CopyTo($rec, 4)
+        [BitConverter]::GetBytes([uint64]3).CopyTo($rec, 24); [BitConverter]::GetBytes([uint64]3).CopyTo($rec, 32)
+        [BitConverter]::GetBytes([uint64]$cdSize).CopyTo($rec, 40); [BitConverter]::GetBytes([uint64]$cdOffset).CopyTo($rec, 48)
+        $ms.Write($rec, 0, 56)
+        $loc = New-Object byte[] 20
+        [BitConverter]::GetBytes([uint32]0x07064b50).CopyTo($loc, 0); [BitConverter]::GetBytes([uint64]$z64At).CopyTo($loc, 8); [BitConverter]::GetBytes([uint32]1).CopyTo($loc, 16)
+        $ms.Write($loc, 0, 20)
+        $end = New-Object byte[] 22
+        [Array]::Copy($b, $eocd, $end, 0, 22)
+        [BitConverter]::GetBytes([uint16]0xFFFF).CopyTo($end, 8); [BitConverter]::GetBytes([uint16]0xFFFF).CopyTo($end, 10)
+        [BitConverter]::GetBytes([uint32]::MaxValue).CopyTo($end, 12); [BitConverter]::GetBytes([uint32]::MaxValue).CopyTo($end, 16)
+        $ms.Write($end, 0, 22)
+        [System.IO.File]::WriteAllBytes($zp, $ms.ToArray())
+        $d = Get-ZipCentralDirectory -Path $zp
+        $d.Error | Should -BeNullOrEmpty
+        $d.Ok | Should -BeTrue
+        @($d.Entries).Count | Should -Be 3
+    }
+}
+
+Describe 'Zip readability fails safe' {
+    It 'treats <Case> as unreadable with guidance' -ForEach @(
+        @{ Case = 'a zero-byte file'; Make = { param($p) [System.IO.File]::WriteAllBytes($p, (New-Object byte[] 0)) } }
+        @{ Case = 'random bytes'; Make = { param($p) [System.IO.File]::WriteAllBytes($p, (New-TestByteArray 4000 -Random)) } }
+        @{ Case = 'a truncated central directory'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('t' + [guid]::NewGuid().ToString('N') + '.zip'))); $cd = Find-ZipSignature $b 0x02014b50; $out = New-Object byte[] ($b.Length - 30); [Array]::Copy($b, 0, $out, 0, $cd + 10); [Array]::Copy($b, $cd + 40, $out, $cd + 10, $b.Length - $cd - 40); [System.IO.File]::WriteAllBytes($p, $out) } }
+        @{ Case = 'a bad central header signature'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('s' + [guid]::NewGuid().ToString('N') + '.zip'))); $cd = Find-ZipSignature $b 0x02014b50; $b[$cd] = 0; [System.IO.File]::WriteAllBytes($p, $b) } }
+        @{ Case = 'an entry count larger than the headers present'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('c' + [guid]::NewGuid().ToString('N') + '.zip'))); $e = $b.Length - 22; [BitConverter]::GetBytes([uint16]9).CopyTo($b, $e + 8); [BitConverter]::GetBytes([uint16]9).CopyTo($b, $e + 10); [System.IO.File]::WriteAllBytes($p, $b) } }
+        @{ Case = 'a directory offset beyond the end of the file'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('o' + [guid]::NewGuid().ToString('N') + '.zip'))); $e = $b.Length - 22; [BitConverter]::GetBytes([uint32]($b.Length + 1000)).CopyTo($b, $e + 16); [System.IO.File]::WriteAllBytes($p, $b) } }
+        @{ Case = 'a Zip64 marker with no locator'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('z' + [guid]::NewGuid().ToString('N') + '.zip'))); $e = $b.Length - 22; [BitConverter]::GetBytes([uint32]::MaxValue).CopyTo($b, $e + 16); [System.IO.File]::WriteAllBytes($p, $b) } }
+        @{ Case = 'a spanned archive'; Make = { param($p) $b = [System.IO.File]::ReadAllBytes((New-Plain ('m' + [guid]::NewGuid().ToString('N') + '.zip'))); $e = $b.Length - 22; [BitConverter]::GetBytes([uint16]1).CopyTo($b, $e + 4); [System.IO.File]::WriteAllBytes($p, $b) } }
+    ) {
+        $p = Join-TestPath $zd ("bad{0}.zip" -f [guid]::NewGuid().ToString('N'))
+        & $Make $p
+        $d = Get-ZipCentralDirectory -Path $p
+        $d.Ok | Should -BeFalse
+        $d.Error | Should -Not -BeNullOrEmpty
+        $i = Get-ZipEntryInfo -Path $p
+        $i.Readable | Should -BeFalse
+        $i.ReadReason | Should -BeIn @('Unparseable', 'Corrupt')
+        Get-ZipGuidance -Source 'X.zip' -Info $i | Should -BeLike "X.zip can't be extracted by this tool*Extract it yourself*"
+    }
+    It 'reports a missing file as unreadable, never throws' {
+        $d = Get-ZipCentralDirectory -Path (Join-TestPath $zd 'nope.zip')
+        $d.Ok | Should -BeFalse
+    }
+}
+
+Describe 'Extraction-time guard' {
+    It 'replaces the raw .NET unsupported-method error with guidance' {
+        $zp = New-Plain 'bz.zip'
+        Edit-ZipHeader -Path $zp -Method 12
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'bz') -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "bz.zip can't be extracted by this tool*Extract it yourself*InputRoot*"
+        Test-Path -LiteralPath (Join-TestPath $zd 'bz') | Should -BeFalse
+    }
+}

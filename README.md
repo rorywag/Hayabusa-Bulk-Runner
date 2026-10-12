@@ -1,0 +1,176 @@
+# Hayabusa-Bulk-Runner
+
+A PowerShell wrapper that runs [Hayabusa](https://github.com/Yamato-Security/hayabusa) across a folder of KAPE collections, one run per host, and rolls the results up into a single cross-host triage view.
+
+Hayabusa is excellent on one host. It has no batch mode, no per-host output split and no cross-host summary, so with forty hosts you end up running it forty times and stitching the results together by hand. This does that part. Point it at a folder with one entry per host and you get, for each host, Hayabusa's HTML alert report, a CSV timeline and a log, plus a dashboard showing which hosts are worst and which rules fired where.
+
+## Status
+
+Pre-release. It's been run against real Hayabusa 4.1.0 and real KAPE output on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Some behaviour still needs confirming on Windows.
+
+## Requirements
+
+- Windows. Hayabusa and the disk image mounting are Windows-only. The rollup can be rebuilt anywhere PowerShell runs.
+- Windows PowerShell 5.1 or PowerShell 7.
+- Hayabusa 4.1.0 with its rules. Run `hayabusa.exe update-rules` once at the start of the engagement and leave the rules alone until it's finished, so every host is checked against the same set.
+- An elevated session if any collection is a disk image, including a disk image inside a ZIP.
+
+## Quick start
+
+```powershell
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+```
+
+Then open `D:\Case\Hayabusa\index.html`.
+
+With an engagement config and a lower severity floor:
+
+```powershell
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa `
+    -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Case\engagement.psd1 -MinLevel medium
+```
+
+`Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
+
+| Parameter | What it does |
+|---|---|
+| `-InputRoot` | Parent folder holding one entry per host |
+| `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot |
+| `-HayabusaPath` | Full path to `hayabusa.exe` |
+| `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default high |
+| `-Threads` | Passed to Hayabusa. Leave it out to let Hayabusa decide |
+| `-Force` | Rerun hosts that already finished |
+| `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
+| `-ConfigPath` | Engagement config file, see below |
+
+## Input model
+
+Each top-level entry in InputRoot is one collection, normally one host:
+
+- a folder: KAPE's loose output, used as is
+- a `.vhdx` or `.vhd`: a KAPE container image, mounted for the run
+- a `.zip`: extracted to a working folder. If it holds exactly one disk image, that image is mounted. Otherwise the extracted folder is used as loose output
+
+Hayabusa recurses, so it doesn't matter how deep the logs are inside each entry.
+
+Everything else is skipped. KAPE's own `_ConsoleLog.txt`, `_CopyLog.csv` and `_SkipLog.csv` are skipped quietly. Any other loose file gets a warning. Links and junctions are skipped, since they could point outside InputRoot. So are `$RECYCLE.BIN` and `System Volume Information` if InputRoot is a drive root.
+
+Each entry gets a collection name, used for its output folder: the entry name without the container extension, with anything outside `A-Z a-z 0-9 . _ -` replaced by `_`. Two entries that end up with the same name, say `HOST01` and `host01.zip`, stop the run before anything is written, and you rename one.
+
+The collection name isn't the host name. KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection whose results hold more than one `Computer` value shows as `[multiple]` with a count of each, rather than quietly picking one. A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
+
+Things that trip people up, and get a warning:
+
+- InputRoot pointed at one host's volume root, so Windows, Users and the rest would each become a "host"
+- a disk image sitting inside a loose folder. It won't be mounted there. Put the image directly in InputRoot
+- a ZIP holding a disk image and loose event logs as well. The image is processed and the loose logs are skipped
+- a ZIP inside a ZIP. Only one level is opened
+
+## ZIPs: extract them first if the tool says so
+
+The ZIP reader in .NET only handles the two common compression methods, Stored and Deflate, and no encryption. A ZIP made with Deflate64, BZip2, LZMA, Zstandard, XZ or PPMd, or with a password, can't be extracted by this tool.
+
+Every ZIP is checked when InputRoot is read, before anything runs. One that can't be extracted is listed in a warning at the start of the run, recorded in the manifest, and marked Failed, with the reason and what to do:
+
+```
+HOST07.zip can't be extracted by this tool: entry 'C/Windows/System32/winevt/Logs/Security.evtx' uses compression method 9 (Deflate64), which .NET cannot extract. Extract it yourself, put the extracted folder in InputRoot, and rerun.
+```
+
+So: extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot in place of the ZIP, and rerun. Hosts already done are skipped. If the ZIP held a disk image, put the `.vhdx` or `.vhd` itself directly in InputRoot, not the folder around it, so it gets mounted.
+
+If the check can't make sense of a ZIP at all, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
+
+ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits (100 GB and 250:1 by default, both configurable). Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
+
+## Disk images and elevation
+
+Mounting a disk image needs an elevated session. If any collection is a disk image, or a ZIP holding one, and the session isn't elevated, the run stops at the start before anything is written and says which collections need it. Rerun from an Administrator PowerShell prompt. A run with only folders and plain ZIPs doesn't need elevation.
+
+## Evidence integrity
+
+The evidence is only ever read.
+
+- Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool creates a differencing disk under `OutputRoot\_diff`, with the evidence image as its parent, and mounts that. Windows replays the journal into the child, and the parent is only ever read. This has been checked on real KAPE output, with the parent's hash the same before and after.
+- An image that's already attached is refused, not reused or dismounted, since this run didn't attach it.
+- ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
+- After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point, and the tool only deletes inside its own `_work`, `_mnt` and `_diff` folders. If a dismount fails, everything after it is left in place and the error says what's still there.
+- OutputRoot can't be inside InputRoot, so output never lands next to the evidence.
+- Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out (see Outputs).
+
+## Outputs
+
+Everything lands under OutputRoot:
+
+| Path | What it is |
+|---|---|
+| `<Collection>\<Collection>_report.html` | Hayabusa's own alert summary for that host |
+| `<Collection>\<Collection>_timeline.csv` | Hayabusa's CSV timeline, UTC |
+| `<Collection>\<Collection>_hayabusa.log` | The exact arguments, Hayabusa's output and its exit code |
+| `run_manifest.csv` | One row per collection with its latest status, counts, warnings and errors |
+| `_runs\run_meta_<time>_<RunId>.json` | What each run used: Hayabusa and rules versions, settings and where each came from, config hash, ZIP limits, collections, summary |
+| `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
+| `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
+| `index.html` | The dashboard |
+
+The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
+
+Values a spreadsheet would treat as a formula, anything starting with `=`, `+`, `-`, `@`, a tab or a carriage return, get a leading `'` in the triage CSVs and the manifest, so opening them in Excel can't run anything. The tool strips that `'` again when it reads its own manifest back.
+
+Severity follows Hayabusa's six levels: emergency, critical, high, medium, low, informational. One emergency outranks any number of criticals.
+
+## Rerunning and resuming
+
+The manifest is the record of what's been done. On a rerun, hosts that are Completed or CompletedWithErrors are skipped, and everything else is tried again: Failed, Pending, and anything left Running by a run that was interrupted. `-Force` reruns the lot. So after fixing a problem, say extracting a ZIP the tool couldn't, just run the same command again.
+
+| Status | Meaning |
+|---|---|
+| Completed | Hayabusa exited cleanly. No detections is still Completed |
+| CompletedWithErrors | Hayabusa exited non-zero but still wrote a timeline. Counts are kept and the exit code is in Error |
+| Failed | Nothing usable: the input couldn't be prepared, Hayabusa wrote nothing, or the results couldn't be read |
+| Pending | Found but not run yet |
+| Running | Being run, or the run was interrupted |
+
+One host failing never stops the batch.
+
+To rebuild the triage files and dashboard from an existing OutputRoot without rerunning anything, on any machine:
+
+```powershell
+.\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Case\Hayabusa
+```
+
+## Engagement config
+
+Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](config/engagement.example.psd1) and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits.
+
+It's read as data only, so it can't run code. Unknown keys are rejected, so a typo can't silently drop a filter. A setting given on the command line wins over the config, which wins over the default, and run-meta records which one each setting came from. Real configs are git-ignored. Only the example is tracked.
+
+## Running the tests
+
+The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence. Every fixture is synthetic.
+
+```powershell
+Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -SkipPublisherCheck
+Invoke-Pester -Path .\tests
+```
+
+Most of the suite runs anywhere. The end-to-end run with the fake binary needs Windows. `tests\Mount.Integration.Tests.ps1` builds a small VHDX, mounts it the same way a real run does, and checks the image's hash is unchanged afterwards. It only runs on Windows in an elevated session and skips everywhere else.
+
+Lint with [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer), which includes the Windows PowerShell 5.1 compatibility rules:
+
+```powershell
+Install-Module PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser
+foreach ($p in '.\Invoke-BulkHayabusa.ps1', '.\Invoke-HayabusaRollup.ps1', '.\lib') {
+    Invoke-ScriptAnalyzer -Path $p -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+}
+Invoke-ScriptAnalyzer -Path .\tests -Recurse -Settings .\tests\PSScriptAnalyzerSettings.psd1
+```
+
+CI runs both, plus gitleaks, on every push and pull request.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE). Hayabusa is a separate project under its own licence. This tool calls it as an external program and doesn't include any of its code.
