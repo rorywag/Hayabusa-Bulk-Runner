@@ -338,14 +338,37 @@ function Get-ZipEntryInfo {
     return $info
 }
 
+function Get-ZipReadReasonText {
+    <#
+    .SYNOPSIS
+        The short reason a ZIP cannot be extracted, for analyst-facing text.
+    .DESCRIPTION
+        Names the kind of problem only. The offending entry and method stay
+        in ReadError, which goes to the per-host log, not the console,
+        manifest or dashboard.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Info
+    )
+
+    if ($Info.ReadReason -eq 'Unsupported') {
+        return 'unsupported compression or encryption'
+    }
+    return 'it could not be read, the file may be damaged'
+}
+
 function Get-ZipGuidance {
     <#
     .SYNOPSIS
-        Plain guidance for a ZIP this tool cannot extract.
+        Short guidance for a ZIP this tool cannot extract.
     .DESCRIPTION
-        When the ZIP is known to hold a disk image, the operator is told to
-        put the extracted image itself in InputRoot, because an image left
-        inside a folder is not mounted and Hayabusa would find nothing.
+        Used in the manifest, the dashboard and the run-time error. When the
+        ZIP is known to hold a disk image, the operator is told to put the
+        extracted image itself in InputRoot, because an image left inside a
+        folder is not mounted and Hayabusa would find nothing.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -360,12 +383,12 @@ function Get-ZipGuidance {
     $images = @($Info.ImageEntries)
     if ($images.Count -gt 0) {
         $leaf = ($images | ForEach-Object { ($_ -split '[\\/]')[-1] }) -join ', '
-        $advice = "Extract it yourself and put the extracted disk image ($leaf) directly in InputRoot, then rerun."
+        $advice = "Extract it yourself, put the extracted disk image ($leaf) directly in InputRoot, and rerun."
     }
     else {
         $advice = 'Extract it yourself, put the extracted folder in InputRoot, and rerun.'
     }
-    return "$Source can't be extracted by this tool: $($Info.ReadError). $advice"
+    return "$Source can't be extracted by this tool ($(Get-ZipReadReasonText -Info $Info)). $advice"
 }
 
 function Test-ZipEntryName {
@@ -654,7 +677,8 @@ function Expand-ZipArchiveSafe {
         }
         if ($inner -is [System.IO.InvalidDataException] -and $inner.Message -match '(?i)compress|encrypt|not supported') {
             $name = [System.IO.Path]::GetFileName($Path)
-            throw "$name can't be extracted by this tool: $($inner.Message). Extract it yourself, put the extracted folder, or the disk image inside it, in InputRoot, and rerun."
+            Write-Verbose "${name}: $($inner.Message)"
+            throw "$name can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder, or the disk image inside it, in InputRoot, and rerun."
         }
         throw
     }

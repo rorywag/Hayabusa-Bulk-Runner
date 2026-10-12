@@ -180,7 +180,26 @@ Describe 'Extraction-time guard' {
         $zp = New-Plain 'bz.zip'
         Edit-ZipHeader -Path $zp -Method 12
         $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'bz') -MaxUncompressedBytes 1GB -MaxRatio 250 }
-        $m | Should -BeLike "bz.zip can't be extracted by this tool*Extract it yourself*InputRoot*"
+        $m | Should -BeLike "bz.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself*InputRoot*"
+        $m | Should -Not -BeLike '*BZip2*'
         Test-Path -LiteralPath (Join-TestPath $zd 'bz') | Should -BeFalse
+    }
+}
+
+Describe 'Short guidance text' {
+    It 'gives <Reason> the reason "<Text>"' -ForEach @(
+        @{ Reason = 'Unsupported'; Text = 'unsupported compression or encryption' }
+        @{ Reason = 'Unparseable'; Text = 'it could not be read, the file may be damaged' }
+        @{ Reason = 'Corrupt'; Text = 'it could not be read, the file may be damaged' }
+    ) {
+        Get-ZipReadReasonText -Info ([pscustomobject]@{ ReadReason = $Reason }) | Should -BeExactly $Text
+    }
+    It 'leaves out the entry and the count, which stay in ReadError' {
+        $info = [pscustomobject]@{ ReadReason = 'Unsupported'; ReadError = "entry 'logs/a.evtx' uses compression method 9 (Deflate64), which .NET cannot extract, and 3 more entries have the same problem"; ImageEntries = @() }
+        Get-ZipGuidance -Source 'H.zip' -Info $info | Should -BeExactly "H.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+    }
+    It 'names the image to put in InputRoot when the zip holds one' {
+        $info = [pscustomobject]@{ ReadReason = 'Unsupported'; ReadError = 'x'; ImageEntries = @('Container/H.vhdx') }
+        Get-ZipGuidance -Source 'H.zip' -Info $info | Should -BeExactly "H.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted disk image (H.vhdx) directly in InputRoot, and rerun."
     }
 }

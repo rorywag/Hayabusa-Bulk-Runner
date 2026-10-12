@@ -2,7 +2,7 @@ BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
     $script:out = New-RollupFixture -OutputRoot (Join-TestPath $TestDrive 'out')
     Invoke-Rollup -OutputRoot $out -WarningAction SilentlyContinue | Out-Null
-    $script:html = [System.IO.File]::ReadAllText((Join-TestPath $out 'index.html'))
+    $script:html = [System.IO.File]::ReadAllText((Join-TestPath $out 'triage_dashboard.html'))
 }
 
 Describe 'Evidence values in the dashboard' {
@@ -91,6 +91,32 @@ Describe 'Layout and content' {
     }
 }
 
+Describe 'Display refinements' {
+    It 'shows a multiple-computer host by its names, with a tag' {
+        $html.Contains('<td>DC01, DC01.corp.local<span class="tag">multiple</span></td>') | Should -BeTrue
+    }
+    It 'dims a zero tile and leaves a non-zero tile alone' {
+        $html.Contains('<div class="tile emer zero"><div class="n">0</div>') | Should -BeTrue
+        $html.Contains('<div class="tile crit"><div class="n">6</div>') | Should -BeTrue
+        $html | Should -Match '\.tile\.zero \.n \{ color: var\(--muted\); font-weight: 400; \}'
+    }
+    It 'names itself in the footer, with the files beside it' {
+        $html | Should -Match '<footer>Files beside triage_dashboard\.html: triage_rules\.csv, triage_hosts\.csv, run_manifest\.csv, _runs, and one folder per collection\.</footer>'
+    }
+    It 'shows a note once when it is stored as both a warning and an error' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'dup')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        $msg = "DUP.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+        Set-RunManifestEntry -Path $m -Collection 'DUP' -Source 'DUP.zip' -RunId 'r' -InputType Zip -Status Failed -WarningMessage @($msg, 'Second note') -ErrorMessage @($msg)
+        Invoke-Rollup -OutputRoot $o -WarningAction SilentlyContinue | Out-Null
+        $d = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
+        $encoded = ConvertTo-HtmlText -Text $msg
+        ([regex]::Matches($d, [regex]::Escape($encoded))).Count | Should -Be 1
+        $d.Contains("<span class=`"err`">$encoded</span><br>Second note</td>") | Should -BeTrue
+    }
+}
+
 Describe 'Provenance' {
     It 'notes mixed severity floors' {
         $html | Should -Match 'Rows come from runs with different severity floors \(exact critical, min high, min medium\)'
@@ -121,7 +147,7 @@ Describe 'Emergency in the dashboard' {
             Write-TestText -Path (Get-CollectionOutputPath -OutputRoot $o -Collection $e.C).Csv -Line ([string[]]$e.Csv) | Out-Null
         }
         Invoke-Rollup -OutputRoot $o -WarningAction SilentlyContinue | Out-Null
-        $script:eh = [System.IO.File]::ReadAllText((Join-TestPath $o 'index.html'))
+        $script:eh = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
     }
 
     It 'has an emergency tile with its count and host count' {

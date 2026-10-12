@@ -21,12 +21,18 @@
     the run moves on to the next.
 
     When the batch finishes, the cross-host rollup is rebuilt:
-    triage_rules.csv, triage_hosts.csv and index.html under OutputRoot.
+    triage_rules.csv, triage_hosts.csv and triage_dashboard.html under
+    OutputRoot.
     Invoke-HayabusaRollup.ps1 rebuilds the same files from an existing
     OutputRoot without rerunning anything.
 
     Settings are resolved in this order: command line, then the config file
     given by -ConfigPath, then built-in defaults.
+
+    A normal run prints one progress line per collection and a short
+    summary at the end, through the information stream. Problems are
+    warnings. -Verbose adds the detail. -InformationAction SilentlyContinue
+    hides the progress lines.
 
 .PARAMETER InputRoot
     Parent folder holding one entry per host.
@@ -94,7 +100,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ToolVersion = '0.5.0'
+# Progress and the end-of-run summary go to the information stream, which
+# PowerShell hides by default. Show it unless the caller chose otherwise.
+if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
+    $InformationPreference = 'Continue'
+}
+
+$ToolVersion = '0.6.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
 foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')) {
@@ -136,13 +148,22 @@ Assert-UniqueCollectionName -Collections $collections
 Assert-CollectionNameAllowed -Collections $collections
 Write-Verbose "Discovered $($collections.Count) collection(s)."
 
-# Startup summary of ZIPs this tool cannot extract. They are recorded and
-# reported per collection too, but listed together here so they are seen
-# before a long run starts.
+# ZIPs this tool cannot extract: one short warning line each, listed here
+# before a long run starts, then the advice once in normal output. The
+# collection's own progress line later refers back to this warning.
 $unreadableZips = @($collections | Where-Object { $_.InputType -eq 'Zip' -and $null -ne $_.Zip -and -not $_.Zip.Readable })
 if ($unreadableZips.Count -gt 0) {
-    $lines = $unreadableZips | ForEach-Object { '  ' + (Get-ZipGuidance -Source $_.Source -Info $_.Zip) }
-    Write-Warning ("{0} ZIP(s) can't be extracted by this tool and will be recorded as Failed:`n{1}" -f $unreadableZips.Count, ($lines -join "`n"))
+    foreach ($z in $unreadableZips) {
+        Write-Warning "$($z.Source) can't be extracted by this tool ($(Get-ZipReadReasonText -Info $z.Zip))."
+    }
+    Write-Information '  To include them, extract each one yourself, put the extracted folder in InputRoot, and rerun. Hosts already done are skipped.'
+    foreach ($z in $unreadableZips) {
+        $images = @($z.Zip.ImageEntries)
+        if ($images.Count -gt 0) {
+            $leaf = ($images | ForEach-Object { ($_ -split '[\\/]')[-1] }) -join ', '
+            Write-Information "  $($z.Source) holds a disk image: put the extracted $leaf directly in InputRoot."
+        }
+    }
 }
 
 # Fail before anything is written if disk images need an elevated session.
@@ -203,12 +224,12 @@ $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifes
 
 # A rollup failure is recorded and reported, and never hides the batch
 # results already in the manifest.
-$rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Index = $null; HostCount = $null; RuleCount = $null; Error = $null }
+$rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Dashboard = $null; HostCount = $null; RuleCount = $null; Error = $null }
 try {
     $rollup = Invoke-Rollup -OutputRoot $OutputRoot
     $rollupRecord.HostsCsv = $rollup.HostsCsv
     $rollupRecord.RulesCsv = $rollup.RulesCsv
-    $rollupRecord.Index = $rollup.Index
+    $rollupRecord.Dashboard = $rollup.Dashboard
     $rollupRecord.HostCount = $rollup.HostCount
     $rollupRecord.RuleCount = $rollup.RuleCount
 }
@@ -222,8 +243,14 @@ $runMeta['Summary'] = $batch
 $runMeta['Rollup'] = $rollupRecord
 Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
 
-Write-Verbose ("Done. {0} processed: {1} completed, {2} completed with errors, {3} failed. {4} skipped." -f
+Write-Information ("Done: {0} processed, {1} completed, {2} completed with errors, {3} failed, {4} skipped." -f
     $batch.Processed, $batch.Completed, $batch.CompletedWithErrors, $batch.Failed, $batch.Skipped)
+if ($null -eq $rollupRecord.Error) {
+    Write-Information "Output is in $OutputRoot. Open triage_dashboard.html there to start triage."
+}
+else {
+    Write-Information "Output is in $OutputRoot. The dashboard could not be built, see the warning above."
+}
 
 [pscustomobject]@{
     RunId        = $runId

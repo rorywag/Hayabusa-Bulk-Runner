@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 5
+$script:RunMetaSchemaVersion = 6
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.

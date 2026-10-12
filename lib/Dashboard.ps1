@@ -1,4 +1,4 @@
-# index.html is static: inline CSS, no script, no external requests. The
+# triage_dashboard.html is static: inline CSS, no script, no external requests. The
 # Content Security Policy also forbids script outright, so even a value that
 # somehow escaped encoding could not run.
 $script:DashboardCsp = "default-src 'none'; style-src 'unsafe-inline'"
@@ -43,6 +43,8 @@ h2 { font-size: 17px; margin: 28px 0 10px; }
 .tile .l { color: var(--muted); font-size: 12px; }
 .tile.emer .n { color: var(--emer); } .tile.crit .n { color: var(--crit); } .tile.high .n { color: var(--high); }
 .tile.med .n { color: var(--med); } .tile.low .n { color: var(--low); }
+.tile.zero { background: transparent; }
+.tile.zero .n { color: var(--muted); font-weight: 400; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
 .panel h3 { font-size: 14px; margin: 0 0 8px; }
 .panel ol { margin: 0; padding-left: 20px; }
@@ -82,7 +84,7 @@ function ConvertTo-HtmlText {
     .DESCRIPTION
         Replaces &, <, >, " and '. Written out rather than using
         WebUtility.HtmlEncode so the result is identical on Windows
-        PowerShell 5.1 and PowerShell 7. Every value written into index.html
+        PowerShell 5.1 and PowerShell 7. Every value written into triage_dashboard.html
         goes through this, since rule titles and computer names come from
         the evidence and could be crafted to inject markup.
     #>
@@ -191,14 +193,15 @@ function ConvertTo-RelativeNote {
 function New-DashboardHtml {
     <#
     .SYNOPSIS
-        Builds index.html from the rollup data.
+        Builds triage_dashboard.html from the rollup data.
     .DESCRIPTION
         Order: summary leading with the top emergency, critical and high
-        rules, the
-        full rule table, the host table with links to each host's report,
-        timeline and log, then provenance. Every value is HTML-encoded.
-        Links are relative paths under OutputRoot and only appear when the
-        file exists.
+        rules, the full rule table, the host table with links to each
+        host's report, timeline and log, then provenance. Every value is
+        HTML-encoded. Links are relative paths under OutputRoot and only
+        appear when the file exists. Severity tiles with a count of zero are
+        dimmed so the levels that fired stand out. Each distinct note on a
+        host row is shown once, errors first.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds a string only.')]
     [CmdletBinding()]
@@ -243,12 +246,20 @@ function New-DashboardHtml {
     # Summary
     [void]$sb.AppendLine('<h1>Hayabusa triage</h1>')
     [void]$sb.AppendLine("<p class=`"meta`">Built $(& $e $Data.BuiltUtc) from $(& $e $hosts.Count) collection(s). $(& $e $rules.Count) rule(s) fired.</p>")
+    # A zero tile is dimmed, so the eye goes to the levels that fired.
+    $tile = {
+        param($Class, $Count, $Label)
+        if ($Count -eq 0) {
+            $Class = "$Class zero"
+        }
+        "<div class=`"tile $Class`"><div class=`"n`">$(& $e $Count)</div><div class=`"l`">$Label</div></div>"
+    }
     [void]$sb.AppendLine('<div class="tiles">')
-    [void]$sb.AppendLine("<div class=`"tile emer`"><div class=`"n`">$(& $e $emerTotal)</div><div class=`"l`">emergency detections on $(& $e $hostsEmer) host(s)</div></div>")
-    [void]$sb.AppendLine("<div class=`"tile crit`"><div class=`"n`">$(& $e $critTotal)</div><div class=`"l`">critical detections on $(& $e $hostsCrit) host(s)</div></div>")
-    [void]$sb.AppendLine("<div class=`"tile high`"><div class=`"n`">$(& $e $highTotal)</div><div class=`"l`">high detections on $(& $e $hostsHigh) host(s)</div></div>")
-    [void]$sb.AppendLine("<div class=`"tile med`"><div class=`"n`">$(& $e $medTotal)</div><div class=`"l`">medium detections</div></div>")
-    [void]$sb.AppendLine("<div class=`"tile low`"><div class=`"n`">$(& $e $lowTotal)</div><div class=`"l`">low detections</div></div>")
+    [void]$sb.AppendLine((& $tile 'emer' $emerTotal "emergency detections on $(& $e $hostsEmer) host(s)"))
+    [void]$sb.AppendLine((& $tile 'crit' $critTotal "critical detections on $(& $e $hostsCrit) host(s)"))
+    [void]$sb.AppendLine((& $tile 'high' $highTotal "high detections on $(& $e $hostsHigh) host(s)"))
+    [void]$sb.AppendLine((& $tile 'med' $medTotal 'medium detections'))
+    [void]$sb.AppendLine((& $tile 'low' $lowTotal 'low detections'))
     [void]$sb.AppendLine('</div>')
 
     $topLevels = @('emergency', 'critical', 'high')
@@ -309,8 +320,12 @@ function New-DashboardHtml {
             if ($h.HostUnknown) {
                 $hostCell = "$(& $e $h.Collection)<span class=`"tag`">host unknown</span>"
             }
-            elseif ($h.Host -eq '[multiple]') {
+            elseif ($h.Multiple -and $h.Host -eq '[multiple]') {
+                # Names could not be read from the CSV.
                 $hostCell = "<span class=`"tag`">$(& $e $h.Host)</span>"
+            }
+            elseif ($h.Multiple) {
+                $hostCell = "$(& $e $h.Host)<span class=`"tag`">multiple</span>"
             }
             else {
                 $hostCell = & $e $h.Host
@@ -326,16 +341,30 @@ function New-DashboardHtml {
             }
             $linkCell = @($linkParts) -join ''
 
+            # The manifest joins several messages with " | ". Each distinct
+            # one is shown once, errors first, so a message stored as both
+            # a warning and an error by an earlier run appears only once.
             $notes = New-Object System.Collections.Generic.List[string]
+            $seen = New-Object System.Collections.Generic.List[string]
             $rel = { param($t) ConvertTo-RelativeNote -Text $t -OutputRoot $Data.OutputRoot }
-            if (-not [string]::IsNullOrWhiteSpace($h.Error)) {
-                $notes.Add("<span class=`"err`">$(& $e (& $rel $h.Error))</span>")
-            }
-            if (-not [string]::IsNullOrWhiteSpace($h.ReadError)) {
-                $notes.Add("<span class=`"err`">Rollup could not read the CSV: $(& $e (& $rel $h.ReadError))</span>")
-            }
-            if (-not [string]::IsNullOrWhiteSpace($h.Warning)) {
-                $notes.Add((& $e (& $rel $h.Warning)))
+            $noteSets = @(
+                @('err', '', [string]$h.Error),
+                @('err', 'Rollup could not read the CSV: ', [string]$h.ReadError),
+                @('', '', [string]$h.Warning)
+            )
+            foreach ($set in $noteSets) {
+                foreach ($part in ($set[2] -split ' \| ')) {
+                    $text = $part.Trim()
+                    if ($text.Length -eq 0 -or $seen.Contains($text)) {
+                        continue
+                    }
+                    $seen.Add($text)
+                    $noteHtml = & $e "$($set[1])$(& $rel $text)"
+                    if ($set[0] -eq 'err') {
+                        $noteHtml = "<span class=`"err`">$noteHtml</span>"
+                    }
+                    $notes.Add($noteHtml)
+                }
             }
             $source = ''
             if ($h.Source -ne $h.Collection) {
@@ -352,7 +381,7 @@ function New-DashboardHtml {
             [void]$sb.AppendLine("<td>$topCell</td><td class=`"links`">$linkCell</td><td class=`"notes`">$($notes.ToArray() -join '<br>')</td></tr>")
         }
         [void]$sb.AppendLine('</tbody></table></div>')
-        [void]$sb.AppendLine('<p class="dim">Blank counts mean no readable results for that collection. "host unknown" means no detections named a computer: a clean host at the floor, or one that has not produced results. HostsAffected counts collections, so a [multiple] collection counts once.</p>')
+        [void]$sb.AppendLine('<p class="dim">Blank counts mean no readable results for that collection. "host unknown" means no detections named a computer: a clean host at the floor, or one that has not produced results. HostsAffected counts collections, so a collection tagged multiple counts once however many computers it holds.</p>')
     }
 
     # Provenance
@@ -375,7 +404,7 @@ function New-DashboardHtml {
         [void]$sb.AppendLine('</tbody></table></div>')
     }
 
-    [void]$sb.AppendLine('<footer>Files beside this page: triage_rules.csv, triage_hosts.csv, run_manifest.csv, and one folder per collection.</footer>')
+    [void]$sb.AppendLine('<footer>Files beside triage_dashboard.html: triage_rules.csv, triage_hosts.csv, run_manifest.csv, _runs, and one folder per collection.</footer>')
     [void]$sb.AppendLine('</main></body>')
     [void]$sb.AppendLine('</html>')
     return $sb.ToString()

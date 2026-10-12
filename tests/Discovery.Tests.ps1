@@ -79,8 +79,8 @@ Describe 'Collection names' {
         $m | Should -BeLike '*HOST01: HOST01, host01.zip*'
     }
     It 'refuses reserved names' {
-        $m = Get-ThrownMessage { Assert-CollectionNameAllowed -Collections @([pscustomobject]@{ Collection = '_runs'; Source = '_runs' }, [pscustomobject]@{ Collection = 'Index.HTML'; Source = 'Index.HTML' }, [pscustomobject]@{ Collection = '_diff'; Source = '_diff' }) }
-        $m | Should -BeLike '*3 InputRoot entr(ies)*_runs -> _runs*Index.HTML -> Index.HTML*_diff -> _diff*'
+        $m = Get-ThrownMessage { Assert-CollectionNameAllowed -Collections @([pscustomobject]@{ Collection = '_runs'; Source = '_runs' }, [pscustomobject]@{ Collection = 'Triage_Dashboard.HTML'; Source = 'Triage_Dashboard.HTML' }, [pscustomobject]@{ Collection = '_diff'; Source = '_diff' }) }
+        $m | Should -BeLike '*3 InputRoot entr(ies)*_runs -> _runs*Triage_Dashboard.HTML -> Triage_Dashboard.HTML*_diff -> _diff*'
     }
 }
 
@@ -123,7 +123,9 @@ Describe 'ZIP peek during discovery' {
         $d64 = New-TestZip -Path (Join-TestPath $zin 'D64.zip') -Entries ([ordered]@{ 'Container/D64.vhdx' = 'parent' })
         Edit-ZipHeader -Path $d64 -Method 9
         $script:zc = @{}
-        Get-InputCollection -InputRoot $zin -WarningAction SilentlyContinue | ForEach-Object { $zc[$_.Collection] = $_ }
+        $zw = $null
+        Get-InputCollection -InputRoot $zin -WarningVariable zw -WarningAction SilentlyContinue | ForEach-Object { $zc[$_.Collection] = $_ }
+        $script:zipWarnings = @($zw | ForEach-Object { "$_" })
     }
     It 'finds an image nested in a zip without extracting' {
         @($zc.IMG_EVTX.Zip.ImageEntries) | Should -Contain 'disk/host.vhdx'
@@ -143,7 +145,20 @@ Describe 'ZIP peek during discovery' {
     It 'guides an unsupported zip holding an image to the image itself' {
         $zc.D64.Zip.Readable | Should -BeFalse
         $zc.D64.Zip.ReadReason | Should -Be 'Unsupported'
-        $zc.D64.Warnings[0] | Should -BeLike "D64.zip can't be extracted by this tool: entry 'Container/D64.vhdx' uses compression method 9 (Deflate64)*put the extracted disk image (D64.vhdx) directly in InputRoot*"
+        $zc.D64.Warnings[0] | Should -BeExactly "D64.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted disk image (D64.vhdx) directly in InputRoot, and rerun."
+    }
+    It 'keeps the guidance short: no entry name, method or count' {
+        foreach ($c in $zc.CORRUPT, $zc.D64) {
+            $c.Warnings[0] | Should -Not -BeLike '*Container/*'
+            $c.Warnings[0] | Should -Not -BeLike '*method*'
+            $c.Warnings[0] | Should -Not -BeLike '*more entr*'
+        }
+        $zc.CORRUPT.Warnings[0] | Should -BeLike "CORRUPT.zip can't be extracted by this tool (it could not be read, the file may be damaged).*"
+        $zc.D64.Zip.ReadError | Should -BeLike "*entry 'Container/D64.vhdx' uses compression method 9 (Deflate64)*"
+    }
+    It 'records the guidance on the collection but does not warn about it here' {
+        @($zipWarnings | Where-Object { $_ -like "*can't be extracted*" }).Count | Should -Be 0
+        @($zipWarnings | Where-Object { $_ -like 'TWO_IMG.zip: *2 disk images*' }).Count | Should -Be 1
     }
     It 'leaves a plain zip with no warnings' {
         @($zc.PLAIN.Warnings).Count | Should -Be 0

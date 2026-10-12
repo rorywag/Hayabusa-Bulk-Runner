@@ -23,8 +23,8 @@ $script:ReservedCollectionNames = @(
     'triage_hosts.csv.tmp'
     'triage_rules.csv'
     'triage_rules.csv.tmp'
-    'index.html'
-    'index.html.tmp'
+    'triage_dashboard.html'
+    'triage_dashboard.html.tmp'
 )
 
 function ConvertTo-CollectionName {
@@ -100,7 +100,9 @@ function Get-InputCollection {
         - a Loose entry holding disk image files, which are not mounted
         - a ZIP this tool cannot extract: encrypted, an unsupported
           compression method, or a central directory that cannot be read,
-          with guidance to extract it first
+          with guidance to extract it first. This one is recorded on the
+          collection but not written to the warning stream: the main
+          script lists unreadable ZIPs once, in a short startup warning.
         - a ZIP holding more than one disk image
         - a ZIP holding a disk image and loose evtx files, whose loose logs
           will not be processed
@@ -165,6 +167,7 @@ function Get-InputCollection {
         }
 
         $warnings = New-Object System.Collections.Generic.List[string]
+        $quiet = New-Object System.Collections.Generic.List[string]
         $zipInfo = $null
 
         if ($type -eq 'Loose' -and (Test-VolumeRootLayout -Path $item.FullName)) {
@@ -183,7 +186,9 @@ function Get-InputCollection {
         if ($type -eq 'Zip') {
             $zipInfo = Get-ZipEntryInfo -Path $item.FullName
             if (-not $zipInfo.Readable) {
-                $warnings.Add((Get-ZipGuidance -Source $item.Name -Info $zipInfo))
+                $guidance = Get-ZipGuidance -Source $item.Name -Info $zipInfo
+                $warnings.Add($guidance)
+                $quiet.Add($guidance)
             }
             else {
                 $imageCount = @($zipInfo.ImageEntries).Count
@@ -200,7 +205,9 @@ function Get-InputCollection {
         }
 
         foreach ($w in $warnings) {
-            Write-Warning "$($item.Name): $w"
+            if (-not $quiet.Contains($w)) {
+                Write-Warning "$($item.Name): $w"
+            }
         }
 
         $collections.Add([pscustomobject]@{

@@ -62,6 +62,8 @@ Describe 'Resolving loose folders and zips' {
         $m = Get-ThrownMessage { Resolve-Test $cols[$Name] }
         $m | Should -BeLike "$Name.zip can't be extracted by this tool*Extract it yourself*"
         $m | Should -Not -BeLike '*unsupported compression method*'
+        $m | Should -Not -BeLike '*x.evtx*'
+        $m | Should -Not -BeLike '*Deflate64*'
         Test-Path -LiteralPath (Join-TestPath $out '_work' $Name) | Should -BeFalse
     }
 }

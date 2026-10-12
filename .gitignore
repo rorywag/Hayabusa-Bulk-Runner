@@ -53,7 +53,7 @@ $[jJ]
 *.[lL][oO][gG]
 triage_hosts.csv
 triage_rules.csv
-index.html
+triage_dashboard.html
 
 # Common output folder names, in case OutputRoot is pointed inside the repo
 [oO]utput/

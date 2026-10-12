@@ -28,6 +28,9 @@ $script:ReadableStatuses = @('Completed', 'CompletedWithErrors', 'Failed')
 # detections at the severity floor, or a host that never produced results.
 $script:UnknownHostMarker = '[unknown]'
 
+# A [multiple] host is shown by its computer names: this many, then "+N".
+$script:MultipleHostNamesShown = 3
+
 $script:HostCsvColumns = @('Host', 'Collection', 'Status', 'Emergency', 'Critical', 'High', 'Medium', 'Low', 'Total', 'TopRule')
 $script:RuleCsvColumns = @('RuleTitle', 'Level', 'HostsAffected', 'TotalHits')
 $script:RollupRequiredColumns = @('Level', 'RuleTitle')
@@ -266,6 +269,33 @@ function Get-RunProvenance {
     }
 }
 
+function Get-MultipleHostLabel {
+    <#
+    .SYNOPSIS
+        Display label for a collection holding more than one computer.
+    .DESCRIPTION
+        Takes the Computer counts from Get-HayabusaResultSummary, already
+        ordered most rows first. Up to three names are joined, then "+N"
+        for the rest: "DC01, DC01.corp.local" or "WS01, WS02, WS03 +2".
+        Display only. Whether a collection is [multiple] is decided when the
+        results are parsed, and the manifest keeps the marker.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.IDictionary]$Computers
+    )
+
+    $names = @($Computers.Keys)
+    $label = ($names | Select-Object -First $script:MultipleHostNamesShown) -join ', '
+    if ($names.Count -gt $script:MultipleHostNamesShown) {
+        $label += " +$($names.Count - $script:MultipleHostNamesShown)"
+    }
+    return $label
+}
+
 function Get-RollupData {
     <#
     .SYNOPSIS
@@ -275,7 +305,9 @@ function Get-RollupData {
         Completed, CompletedWithErrors or Failed, that collection's
         timeline CSV. Nothing is written and no host is rerun.
 
-        Hosts: one row per manifest row. A blank Host becomes [unknown].
+        Hosts: one row per manifest row. A blank Host becomes [unknown]. A
+        [multiple] Host is shown by its computer names when the CSV can be
+        read, and stays [multiple] when it cannot.
         Counts are null, shown blank, when there is no readable CSV, so a
         host that never produced results does not read as clean. Sorted by
         Emergency, Critical, High, Medium, Low and Total, highest first, then problem
@@ -352,6 +384,18 @@ function Get-RollupData {
         if ($hostUnknown) {
             $hostName = $script:UnknownHostMarker
         }
+        $multiple = ($hostName -eq $script:MultipleHostMarker)
+        if ($multiple -and $null -ne $detection) {
+            try {
+                $label = Get-MultipleHostLabel -Computers (Get-HayabusaResultSummary -CsvPath $paths.Csv).Computers
+                if (-not [string]::IsNullOrEmpty($label)) {
+                    $hostName = $label
+                }
+            }
+            catch {
+                Write-Verbose "${collection}: could not list computer names: $($_.Exception.Message)"
+            }
+        }
 
         # Links only for rows whose results are read. A Pending or Running
         # row's files may be stale or half-written.
@@ -378,6 +422,7 @@ function Get-RollupData {
         $hosts.Add([pscustomobject]@{
                 Host         = $hostName
                 HostUnknown  = $hostUnknown
+                Multiple     = $multiple
                 Collection   = $collection
                 Source       = [string]$entry.Source
                 Status       = [string]$entry.Status
@@ -486,7 +531,8 @@ function ConvertTo-RollupCsvText {
 function Invoke-Rollup {
     <#
     .SYNOPSIS
-        Writes triage_hosts.csv, triage_rules.csv and index.html under OutputRoot.
+        Writes triage_hosts.csv, triage_rules.csv and triage_dashboard.html
+        under OutputRoot.
     .DESCRIPTION
         Built only from the manifest, the per-host CSVs and run-meta, so it
         can be rebuilt from an existing OutputRoot at any time without
@@ -505,12 +551,12 @@ function Invoke-Rollup {
 
     $hostsPath = Join-Path -Path $OutputRoot -ChildPath 'triage_hosts.csv'
     $rulesPath = Join-Path -Path $OutputRoot -ChildPath 'triage_rules.csv'
-    $indexPath = Join-Path -Path $OutputRoot -ChildPath 'index.html'
+    $dashboardPath = Join-Path -Path $OutputRoot -ChildPath 'triage_dashboard.html'
 
     if ($PSCmdlet.ShouldProcess($OutputRoot, 'Write rollup')) {
         Write-TextFileAtomic -Path $hostsPath -Text (ConvertTo-RollupCsvText -Rows $data.Hosts -Columns $script:HostCsvColumns) -Bom
         Write-TextFileAtomic -Path $rulesPath -Text (ConvertTo-RollupCsvText -Rows $data.Rules -Columns $script:RuleCsvColumns) -Bom
-        Write-TextFileAtomic -Path $indexPath -Text (New-DashboardHtml -Data $data)
+        Write-TextFileAtomic -Path $dashboardPath -Text (New-DashboardHtml -Data $data)
     }
 
     foreach ($w in $data.Warnings) {
@@ -520,7 +566,7 @@ function Invoke-Rollup {
     [pscustomobject]@{
         HostsCsv  = $hostsPath
         RulesCsv  = $rulesPath
-        Index     = $indexPath
+        Dashboard = $dashboardPath
         HostCount = @($data.Hosts).Count
         RuleCount = @($data.Rules).Count
         Warnings  = $data.Warnings

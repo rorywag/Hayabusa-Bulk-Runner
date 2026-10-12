@@ -70,13 +70,34 @@ Describe 'triage_hosts.csv' {
         $rulesCsv.RuleTitle | Should -Not -Contain 'StaleRule'
         $rulesCsv.RuleTitle | Should -Not -Contain 'HalfRule'
     }
-    It 'keeps [multiple] for a multi-Computer host' {
-        $byC.MULTI.Host | Should -BeExactly '[multiple]'
+    It 'shows a multi-Computer host by its computer names' {
+        $byC.MULTI.Host | Should -BeExactly 'DC01, DC01.corp.local'
         $byC.MULTI.Critical | Should -Be '2'
+    }
+    It 'leaves the [multiple] marker in the manifest' {
+        (Get-RunManifest -Path $mp)['MULTI'].Host | Should -BeExactly '[multiple]'
     }
     It 'leaves an unreadable CSV blank and warns' {
         $byC.BADCSV.Total | Should -Be ''
         @($warns | Where-Object { $_ -like 'Rollup: BADCSV: *missing column(s) RuleTitle*' }).Count | Should -Be 1
+    }
+}
+
+Describe 'Multiple-computer label' {
+    It 'joins up to three names, most rows first' {
+        $c = [ordered]@{ 'WS01' = 5; 'WS01.corp.local' = 2 }
+        Get-MultipleHostLabel -Computers $c | Should -BeExactly 'WS01, WS01.corp.local'
+    }
+    It 'adds +N past three names' {
+        $c = [ordered]@{ 'WS01' = 9; 'WS02' = 5; 'WS03' = 4; 'WS04' = 2; 'WS05' = 1 }
+        Get-MultipleHostLabel -Computers $c | Should -BeExactly 'WS01, WS02, WS03 +2'
+    }
+    It 'falls back to [multiple] when the CSV cannot be read' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'multi-unread')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'M2' -Source 'M2' -RunId 'r' -InputType Loose -Status Pending -HostName '[multiple]'
+        @((Get-RollupData -OutputRoot $o).Hosts)[0].Host | Should -BeExactly '[multiple]'
     }
 }
 
@@ -155,8 +176,8 @@ Describe 'Standalone regeneration' {
     BeforeAll {
         $script:copyHosts = [System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_hosts.csv'))
         $script:copyRules = [System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_rules.csv'))
-        $script:copyHtml = [System.IO.File]::ReadAllText((Join-TestPath $out 'index.html'))
-        foreach ($f in 'triage_hosts.csv', 'triage_rules.csv', 'index.html') { Remove-Item -LiteralPath (Join-TestPath $out $f) }
+        $script:copyHtml = [System.IO.File]::ReadAllText((Join-TestPath $out 'triage_dashboard.html'))
+        foreach ($f in 'triage_hosts.csv', 'triage_rules.csv', 'triage_dashboard.html') { Remove-Item -LiteralPath (Join-TestPath $out $f) }
         Start-Sleep -Milliseconds 1100
         $script:regen = & $RollupScript -OutputRoot $out -WarningAction SilentlyContinue
     }
@@ -166,7 +187,7 @@ Describe 'Standalone regeneration' {
         $regen.RuleCount | Should -Be 14
         [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_hosts.csv'))) | Should -BeExactly ([Convert]::ToBase64String($copyHosts))
         [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_rules.csv'))) | Should -BeExactly ([Convert]::ToBase64String($copyRules))
-        $h2 = [System.IO.File]::ReadAllText((Join-TestPath $out 'index.html'))
+        $h2 = [System.IO.File]::ReadAllText((Join-TestPath $out 'triage_dashboard.html'))
         $h2 | Should -Not -BeExactly $copyHtml
         ($h2 -replace 'Built [0-9TZ:-]+ from', 'Built X from') | Should -BeExactly ($copyHtml -replace 'Built [0-9TZ:-]+ from', 'Built X from')
     }
@@ -183,13 +204,13 @@ Describe 'Standalone regeneration' {
         Write-TestText -Path (Join-TestPath $bad 'run_manifest.csv') -Line @('"Host","RunId","Status"') | Out-Null
         Get-ThrownMessage { & $RollupScript -OutputRoot $bad } | Should -BeLike '*unexpected columns*'
         (Get-Content -LiteralPath (Join-TestPath $bad 'run_manifest.csv')) -join '' | Should -BeExactly '"Host","RunId","Status"'
-        Test-Path -LiteralPath (Join-TestPath $bad 'index.html') | Should -BeFalse
+        Test-Path -LiteralPath (Join-TestPath $bad 'triage_dashboard.html') | Should -BeFalse
     }
     It 'gives empty but valid outputs for an empty manifest' {
         $o = New-TestDirectory (Join-TestPath $TestDrive 'empty-manifest')
         Initialize-RunManifest -Path (Join-TestPath $o 'run_manifest.csv') | Out-Null
         $r = Invoke-Rollup -OutputRoot $o
-        $h = [System.IO.File]::ReadAllText((Join-TestPath $o 'index.html'))
+        $h = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
         $r.HostCount | Should -Be 0
         $h | Should -Match 'No detections at the severity floor'
         $h | Should -Match 'No collections in the manifest'

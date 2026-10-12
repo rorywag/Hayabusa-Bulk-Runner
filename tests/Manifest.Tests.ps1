@@ -150,7 +150,7 @@ Describe 'Path helpers' {
     }
 
     It 'Write-TextFileAtomic refuses a folder in the way' {
-        $d = New-TestDirectory (Join-TestPath $TestDrive 'blocker' 'index.html')
+        $d = New-TestDirectory (Join-TestPath $TestDrive 'blocker' 'triage_dashboard.html')
         Get-ThrownMessage { Write-TextFileAtomic -Path $d -Text 'x' } | Should -BeLike '*folder of that name is in the way*'
     }
 }

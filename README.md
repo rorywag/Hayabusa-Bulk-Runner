@@ -18,16 +18,33 @@ Pre-release. It's been run against real Hayabusa 4.1.0 and real KAPE output on W
 ## Quick start
 
 ```powershell
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 ```
 
-Then open `D:\Case\Hayabusa\index.html`.
+It prints one line per host as it goes, then a short summary and where to look:
+
+```
+[1/4] DC01 ... Completed, 12 detections
+[2/4] FS02 ... Completed, 6 detections
+WARNING: [3/4] WS03 ... Failed: Hayabusa exited with code 2. See D:\Cases\Case01\Hayabusa\WS03\WS03_hayabusa.log. No CSV was written.
+[4/4] WS04 ... skipped, already Completed
+Done: 3 processed, 2 completed, 0 completed with errors, 1 failed, 1 skipped.
+Output is in D:\Cases\Case01\Hayabusa. Open triage_dashboard.html there to start triage.
+```
+
+Add `-Verbose` for more detail. `-InformationAction SilentlyContinue` hides the progress lines and leaves only warnings.
+
+In a fresh PowerShell window the script may be blocked by the execution policy. This allows it for that window only, and changes nothing on the machine:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
 
 With an engagement config and a lower severity floor:
 
 ```powershell
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Case\KAPE -OutputRoot D:\Case\Hayabusa `
-    -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Case\engagement.psd1 -MinLevel medium
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa `
+    -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
 ```
 
 `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
@@ -42,6 +59,19 @@ With an engagement config and a lower severity floor:
 | `-Force` | Rerun hosts that already finished |
 | `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
 | `-ConfigPath` | Engagement config file, see below |
+
+### Lay out each case the same way
+
+Give each case one folder, and keep its OutputRoot in the same place for the life of the case:
+
+```
+D:\Cases\Case01\
+  KAPE\              InputRoot: one entry per host
+  Hayabusa\          OutputRoot: every run for this case goes here
+  engagement.psd1    the case's config, if it has one
+```
+
+Always rerun into the same OutputRoot. The manifest in it is what lets a rerun skip the hosts already done and pick up the rest, so adding a late host, or a ZIP you've extracted by hand, is just the same command again. Pointing a rerun at a new folder starts the whole case from scratch.
 
 ## Input model
 
@@ -70,11 +100,20 @@ Things that trip people up, and get a warning:
 
 The ZIP reader in .NET only handles the two common compression methods, Stored and Deflate, and no encryption. A ZIP made with Deflate64, BZip2, LZMA, Zstandard, XZ or PPMd, or with a password, can't be extracted by this tool.
 
-Every ZIP is checked when InputRoot is read, before anything runs. One that can't be extracted is listed in a warning at the start of the run, recorded in the manifest, and marked Failed, with the reason and what to do:
+Every ZIP is checked when InputRoot is read, before anything runs. Each one that can't be extracted gets one short warning at the start of the run, followed by what to do:
 
 ```
-HOST07.zip can't be extracted by this tool: entry 'C/Windows/System32/winevt/Logs/Security.evtx' uses compression method 9 (Deflate64), which .NET cannot extract. Extract it yourself, put the extracted folder in InputRoot, and rerun.
+WARNING: HOST07.zip can't be extracted by this tool (unsupported compression or encryption).
+  To include them, extract each one yourself, put the extracted folder in InputRoot, and rerun. Hosts already done are skipped.
 ```
+
+It's marked Failed, and the manifest and dashboard carry the same short message once:
+
+```
+HOST07.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder in InputRoot, and rerun.
+```
+
+The technical detail, such as which entry uses which compression method, goes in that host's `HOST07_hayabusa.log`, linked from the dashboard.
 
 So: extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot in place of the ZIP, and rerun. Hosts already done are skipped. If the ZIP held a disk image, put the `.vhdx` or `.vhd` itself directly in InputRoot, not the folder around it, so it gets mounted.
 
@@ -110,13 +149,28 @@ Everything lands under OutputRoot:
 | `_runs\run_meta_<time>_<RunId>.json` | What each run used: Hayabusa and rules versions, settings and where each came from, config hash, ZIP limits, collections, summary |
 | `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
-| `index.html` | The dashboard |
+| `triage_dashboard.html` | The dashboard |
 
 The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
+
+A collection whose results name more than one computer shows those names as its host in the dashboard and `triage_hosts.csv`, up to three of them and then `+N` for the rest, for example `WS01, WS01.corp.local`. The dashboard tags it "multiple" and its notes list every name with its count. A severity tile with nothing in it is greyed out, so the levels that did fire stand out.
+
+Earlier versions called the dashboard `index.html`. A rerun into an older OutputRoot writes `triage_dashboard.html` and leaves the old `index.html` alone. Delete it by hand.
 
 Values a spreadsheet would treat as a formula, anything starting with `=`, `+`, `-`, `@`, a tab or a carriage return, get a leading `'` in the triage CSVs and the manifest, so opening them in Excel can't run anything. The tool strips that `'` again when it reads its own manifest back.
 
 Severity follows Hayabusa's six levels: emergency, critical, high, medium, low, informational. One emergency outranks any number of criticals.
+
+### Working folders
+
+Some folders under OutputRoot belong to the tool:
+
+| Folder | What it's for |
+|---|---|
+| `_runs` | One provenance record per run, never overwritten. Together they show what every row in the manifest was produced with |
+| `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, so after a clean run this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
+| `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
+| `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
 ## Rerunning and resuming
 
@@ -135,7 +189,7 @@ One host failing never stops the batch.
 To rebuild the triage files and dashboard from an existing OutputRoot without rerunning anything, on any machine:
 
 ```powershell
-.\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Case\Hayabusa
+.\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Hayabusa
 ```
 
 ## Engagement config

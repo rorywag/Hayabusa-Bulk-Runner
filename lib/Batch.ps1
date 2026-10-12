@@ -80,6 +80,18 @@ function Invoke-CollectionRun {
             New-Item -ItemType Directory -Path $paths.Directory -Force | Out-Null
         }
 
+        # An unreadable ZIP is refused by Resolve-CollectionInput below. The
+        # analyst-facing views carry only the short guidance, so the
+        # technical detail (entry, method) goes in this collection's log.
+        if (Test-ZipUnreadable -Collection $Collection) {
+            try {
+                Write-ZipRefusalLog -Collection $Collection -LogPath $paths.Log
+            }
+            catch {
+                Write-Verbose "Could not write $($paths.Log): $($_.Exception.Message)"
+            }
+        }
+
         $resolvedInput = Resolve-CollectionInput -Collection $Collection -OutputRoot $OutputRoot `
             -MaxUncompressedBytes $Resolved.Limits.ZipMaxUncompressedBytes -MaxRatio $Resolved.Limits.ZipMaxRatio `
             -KeepArtifacts:$KeepArtifacts
@@ -146,7 +158,10 @@ function Invoke-CollectionRun {
             }
         }
 
-        $finalWarnings = @(Join-UniqueMessage -Message $warnings.ToArray())
+        # A message already recorded as an error is not repeated as a
+        # warning, so the manifest and dashboard show it once.
+        $errorText = $errors.ToArray()
+        $finalWarnings = @(Join-UniqueMessage -Message $warnings.ToArray() | Where-Object { $errorText -notcontains $_ })
 
         Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
             -RunId $RunId -InputType $Collection.InputType -Status $status -HostName $hostName `
@@ -183,6 +198,59 @@ function Invoke-CollectionRun {
     }
 }
 
+function Test-ZipUnreadable {
+    # True for a ZIP collection that discovery found this tool cannot extract.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Collection
+    )
+
+    return ($Collection.InputType -eq 'Zip' -and $null -ne $Collection.Zip -and -not $Collection.Zip.Readable)
+}
+
+function Write-ZipRefusalLog {
+    <#
+    .SYNOPSIS
+        Writes the per-host log for a ZIP that will not be extracted.
+    .DESCRIPTION
+        Holds the short guidance plus the technical detail from discovery,
+        such as the offending entry and compression method, which is kept
+        out of the console, manifest and dashboard. Hayabusa is not run.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Writes this collection''s own log under OutputRoot.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Collection,
+
+        [Parameter(Mandatory)]
+        [string]$LogPath
+    )
+
+    $lines = @(
+        "Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+        "Source: $($Collection.Source)"
+        (Get-ZipGuidance -Source $Collection.Source -Info $Collection.Zip)
+        "Detail: $($Collection.Zip.ReadError)"
+        'Hayabusa was not run.'
+    )
+    Write-TextFileAtomic -Path $LogPath -Text (($lines -join "`r`n") + "`r`n") | Out-Null
+}
+
+function Format-DetectionCount {
+    # "1 detection", "10 detections".
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([int]$Count)
+
+    if ($Count -eq 1) {
+        return '1 detection'
+    }
+    return "$Count detections"
+}
+
 function Invoke-CollectionBatch {
     <#
     .SYNOPSIS
@@ -193,6 +261,12 @@ function Invoke-CollectionBatch {
         Everything else, including Pending, Failed and rows left Running by
         an interrupted run, is processed. Collections run one at a time so
         Hayabusa can use every thread and only one image is mounted at once.
+
+        Each collection gets one progress line, such as
+        "[2/4] HOST01 ... Completed, 10 detections". Completed and skipped
+        lines go to the information stream. Failed and CompletedWithErrors
+        lines are warnings, except a ZIP already reported at startup as
+        unreadable, which is not warned about twice.
 
         Returns a summary of the counts by outcome.
     #>
@@ -243,8 +317,10 @@ function Invoke-CollectionBatch {
             $row = $existing[$c.Collection]
         }
 
+        $prefix = "[$index/$($Collections.Count)] $($c.Collection) ..."
         if (-not $Force -and $null -ne $row -and $script:FinishedStatuses -contains $row.Status) {
-            Write-Verbose "[$index/$($Collections.Count)] $($c.Collection): already $($row.Status), skipped. Use -Force to rerun."
+            Write-Information "$prefix skipped, already $($row.Status)"
+            Write-Verbose "$($c.Collection): use -Force to rerun."
             $summary.Skipped++
             continue
         }
@@ -261,14 +337,20 @@ function Invoke-CollectionBatch {
         }
         $summary[$result.Status]++
 
+        $counted = Format-DetectionCount -Count $result.Detections
         if ($result.Status -eq 'Failed') {
-            Write-Warning "$($c.Collection): Failed. $($result.Errors -join ' ')"
+            if ((Test-ZipUnreadable -Collection $c) -and (@($result.Errors) -contains (Get-ZipGuidance -Source $c.Source -Info $c.Zip))) {
+                Write-Information "$prefix Failed: ZIP not extracted, see the warning at the start"
+            }
+            else {
+                Write-Warning "$prefix Failed: $($result.Errors -join ' ')"
+            }
         }
         elseif ($result.Status -eq 'CompletedWithErrors') {
-            Write-Warning "$($c.Collection): CompletedWithErrors. $($result.Errors -join ' ')"
+            Write-Warning "$prefix CompletedWithErrors, ${counted}: $($result.Errors -join ' ')"
         }
         else {
-            Write-Verbose "$($c.Collection): $($result.Status), $($result.Detections) detection(s)."
+            Write-Information "$prefix $($result.Status), $counted"
         }
     }
 

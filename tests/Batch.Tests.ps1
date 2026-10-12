@@ -252,6 +252,91 @@ Describe 'One collection can never abort the batch' {
     }
 }
 
+Describe 'Progress lines' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:P = New-BatchRoot 'progress'
+        New-FakeHost -InputRoot $P.In -Name 'P1' -Files @{ 'r.csv' = $good } | Out-Null
+        New-FakeHost -InputRoot $P.In -Name 'P2' -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS02' 'high' 'R')) } | Out-Null
+        New-FakeHost -InputRoot $P.In -Name 'P3' -Behavior "EXIT=2`nCSV=none" | Out-Null
+        New-FakeHost -InputRoot $P.In -Name 'P4' -Behavior "EXIT=3`nCSV=r.csv" -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS04' 'high' 'R')) } | Out-Null
+        function script:Invoke-Captured($Root, [string]$RunId) {
+            $iv = $null
+            $w = $null
+            $env:FAKE_CALLS = $Root.Calls
+            try {
+                $cols = @(Get-InputCollection -InputRoot $Root.In -WarningAction SilentlyContinue)
+                Invoke-CollectionBatch -Collections $cols -ManifestPath $Root.Manifest -OutputRoot $Root.Out -HayabusaPath $hb -Resolved $resolved -Threads $null -RunId $RunId `
+                    -InformationVariable iv -WarningVariable w -WarningAction SilentlyContinue | Out-Null
+            }
+            finally { Remove-Item Env:\FAKE_CALLS -ErrorAction SilentlyContinue }
+            [pscustomobject]@{ Info = @($iv | ForEach-Object { "$_" }); Warn = @($w | ForEach-Object { "$_" }) }
+        }
+        $script:first = Invoke-Captured $P 'p1'
+    }
+
+    It 'prints Completed lines with the detection count' {
+        $first.Info | Should -Contain '[1/4] P1 ... Completed, 3 detections'
+        $first.Info | Should -Contain '[2/4] P2 ... Completed, 1 detection'
+    }
+    It 'warns for Failed and CompletedWithErrors, with the reason' {
+        @($first.Warn | Where-Object { $_ -like '`[3/4`] P3 ... Failed: Hayabusa exited with code 2.*No CSV was written.' }).Count | Should -Be 1
+        @($first.Warn | Where-Object { $_ -like '`[4/4`] P4 ... CompletedWithErrors, 1 detection: Hayabusa exited with code 3.*' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -like '*P3*' -or $_ -like '*P4*' }).Count | Should -Be 0
+    }
+    It 'prints a skipped line on a rerun' {
+        $again = Invoke-Captured $P 'p2'
+        $again.Info | Should -Contain '[1/4] P1 ... skipped, already Completed'
+        $again.Info | Should -Contain '[4/4] P4 ... skipped, already CompletedWithErrors'
+    }
+}
+
+Describe 'An unreadable zip at run time' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:Z = New-BatchRoot 'zipfail'
+        $zp = New-TestZip -Path (Join-TestPath $Z.In 'BADZ.zip') -Entries ([ordered]@{ 'C/Windows/System32/winevt/Logs/Security.evtx' = (New-TestByteArray 40 -Random) })
+        Edit-ZipHeader -Path $zp -Method 9
+        $iv = $null
+        $env:FAKE_CALLS = $Z.Calls
+        try {
+            $cols = @(Get-InputCollection -InputRoot $Z.In -WarningAction SilentlyContinue)
+            Add-PendingCollection -Path $Z.Manifest -Collections $cols -RunId 'z' | Out-Null
+            $script:zipPending = (Get-RunManifest -Path $Z.Manifest)['BADZ']
+            Invoke-CollectionBatch -Collections $cols -ManifestPath $Z.Manifest -OutputRoot $Z.Out -HayabusaPath $hb -Resolved $resolved -Threads $null -RunId 'z' `
+                -InformationVariable iv -WarningAction SilentlyContinue | Out-Null
+        }
+        finally { Remove-Item Env:\FAKE_CALLS -ErrorAction SilentlyContinue }
+        $script:zipInfo = @($iv | ForEach-Object { "$_" })
+        $script:zipRow = (Get-RunManifest -Path $Z.Manifest)['BADZ']
+        $script:guide = "BADZ.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+    }
+
+    It 'holds the guidance as a warning while Pending' {
+        $zipPending.Warning | Should -BeExactly $guide
+    }
+    It 'stores the guidance once, as the error, when it fails' {
+        $zipRow.Status | Should -Be 'Failed'
+        $zipRow.Error | Should -BeExactly $guide
+        $zipRow.Warning | Should -BeExactly ''
+    }
+    It 'refers back to the startup warning on its progress line' {
+        $zipInfo | Should -Contain '[1/1] BADZ ... Failed: ZIP not extracted, see the warning at the start'
+    }
+    It 'puts the technical detail in the per-host log and does not run Hayabusa' {
+        $log = Get-Content -LiteralPath (Join-TestPath $Z.Out 'BADZ' 'BADZ_hayabusa.log') -Raw
+        $log | Should -Match ([regex]::Escape($guide))
+        $log | Should -Match "Detail: entry 'C/Windows/System32/winevt/Logs/Security.evtx' uses compression method 9 \(Deflate64\)"
+        $log | Should -Match 'Hayabusa was not run\.'
+        @(Get-FakeCall $Z).Count | Should -Be 0
+    }
+    It 'keeps the escaping round trip for the deduplicated row' {
+        $raw = @(Import-Csv -LiteralPath $Z.Manifest)
+        $raw[0].Error | Should -BeExactly $guide
+        $raw[0].Warning | Should -BeExactly ''
+    }
+}
+
 Describe 'Off Windows' {
     It 'records each collection Failed before any extraction' {
         Mock Test-IsWindowsHost { $false }
