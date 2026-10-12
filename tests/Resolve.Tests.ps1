@@ -7,6 +7,8 @@ BeforeAll {
     New-TestZip -Path (Join-TestPath $in 'TWO_IMG.zip') -Entries ([ordered]@{ 'a.vhdx' = (New-TestByteArray 10); 'b.VHD' = (New-TestByteArray 10) }) | Out-Null
     New-TestZip -Path (Join-TestPath $in 'NESTED.zip') -Entries ([ordered]@{ 'inner/more.zip' = (New-TestByteArray 10); 'x.evtx' = (New-TestByteArray 10 -Random) }) | Out-Null
     [System.IO.File]::WriteAllBytes((Join-TestPath $in 'CORRUPT.zip'), (New-TestByteArray 500 -Random))
+    $script:deepEntry = 'C/ProgramData/Microsoft/Windows/WER/ReportArchive/AppCrash_' + ('x' * 120) + '/Report_' + ('y' * 100) + '/Report.wer'
+    New-TestZip -Path (Join-TestPath $in 'DEEP.zip') -Entries ([ordered]@{ $deepEntry = 'synthetic'; 'C/Windows/System32/winevt/Logs/Security.evtx' = (New-TestByteArray 50 -Random) }) | Out-Null
     $d64 = New-TestZip -Path (Join-TestPath $in 'D64.zip') -Entries ([ordered]@{ 'x.evtx' = (New-TestByteArray 10 -Random) })
     Edit-ZipHeader -Path $d64 -Method 9
     $script:cols = @{}
@@ -65,6 +67,30 @@ Describe 'Resolving loose folders and zips' {
         $m | Should -Not -BeLike '*x.evtx*'
         $m | Should -Not -BeLike '*Deflate64*'
         Test-Path -LiteralPath (Join-TestPath $out '_work' $Name) | Should -BeFalse
+    }
+}
+
+Describe 'Resolving a zip with deep paths' {
+    It 'extracts it, scans it and tears it down, or fails it with guidance on a runtime that refuses long paths' {
+        $m = $null
+        $r = $null
+        try {
+            $r = Resolve-Test $cols.DEEP
+        }
+        catch {
+            $m = $_.Exception.Message
+        }
+        if ($null -eq $m) {
+            $r.Path | Should -Be (Join-TestPath $out '_work' 'DEEP')
+            @(Get-FileTree -Path $r.Path | Where-Object { $_.Name -eq 'Report.wer' }).Count | Should -Be 1
+            Invoke-CollectionCleanup -Resolved $r
+            Test-Path -LiteralPath $r.Path | Should -BeFalse
+        }
+        else {
+            ($TestOnWindows -and $PSVersionTable.PSVersion.Major -lt 6) | Should -BeTrue -Because "only Windows PowerShell 5.1 may refuse long paths, but got: $m"
+            $m | Should -BeLike "DEEP.zip can't be extracted here: some of its paths are longer than Windows allows*"
+            Test-Path -LiteralPath (Join-TestPath $out '_work' 'DEEP') | Should -BeFalse
+        }
     }
 }
 

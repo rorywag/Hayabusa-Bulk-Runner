@@ -203,3 +203,96 @@ Describe 'Short guidance text' {
         Get-ZipGuidance -Source 'H.zip' -Info $info | Should -BeExactly "H.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted disk image (H.vhdx) directly in InputRoot, and rerun."
     }
 }
+
+Describe 'Long paths' {
+    BeforeAll {
+        $script:lp = New-TestDirectory (Join-TestPath $TestDrive 'longpath')
+        # Shaped like KAPE's WER report archives, which run past 260 characters.
+        $script:deepEntry = 'C/ProgramData/Microsoft/Windows/WER/ReportArchive/' + 'AppCrash_' + ('x' * 120) + '/' + 'Report_' + ('y' * 100) + '/Report.wer'
+        # Windows PowerShell 5.1 may run with legacy path handling, which
+        # refuses long paths outright. Everywhere else the deep entry must extract.
+        $script:mayRefuseLongPaths = $TestOnWindows -and $PSVersionTable.PSVersion.Major -lt 6
+    }
+
+    It 'extracts an entry past 260 characters, and teardown removes it' {
+        $zp = New-TestZip -Path (Join-TestPath $lp 'deep.zip') -Entries ([ordered]@{ $deepEntry = 'synthetic'; 'C/Windows/System32/winevt/Logs/Security.evtx' = (New-TestByteArray 50 -Random) })
+        $dest = Join-TestPath $lp 'deep-out'
+        ($dest.Length + 1 + $deepEntry.Length) | Should -BeGreaterThan 300
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        if ($null -eq $m) {
+            $tree = @(Get-FileTree -Path $dest)
+            @($tree | Where-Object { $_.Name -eq 'Report.wer' }).Count | Should -Be 1
+            @($tree | Where-Object { $_.Name -eq 'Security.evtx' }).Count | Should -Be 1
+            @($tree | Where-Object { $_.FullName.StartsWith('\\?\') }).Count | Should -Be 0
+            Remove-CollectionExtract -Path $dest -WorkRoot $lp
+            Test-Path -LiteralPath $dest | Should -BeFalse
+        }
+        else {
+            $mayRefuseLongPaths | Should -BeTrue -Because "only Windows PowerShell 5.1 may refuse long paths, but got: $m"
+            $m | Should -BeLike "deep.zip can't be extracted here: some of its paths are longer than Windows allows (the longest needs * characters). Point OutputRoot at a shorter folder*"
+            Test-Path -LiteralPath $dest | Should -BeFalse
+        }
+    }
+
+    It 'gives guidance, not a raw .NET error, for a name Windows cannot hold' {
+        $zp = New-TestZip -Path (Join-TestPath $lp 'longname.zip') -Entries ([ordered]@{ ('C/' + ('n' * 300) + '.evtx') = 'synthetic' })
+        $dest = Join-TestPath $lp 'longname-out'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeExactly "longname.zip can't be extracted here: one of its names is 305 characters, longer than the 255 Windows allows. Extract it yourself with a tool that can shorten or skip that entry, put the extracted folder in InputRoot, and rerun."
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+
+    Context 'When the path cannot even be resolved, as on Windows PowerShell 5.1' {
+        BeforeAll {
+            $script:longName = 'C/' + ('r' * 300) + '.evtx'
+            Mock Get-SafeEntryTarget { throw (New-Object System.IO.PathTooLongException 'The specified path, file name, or both are too long.') } -ParameterFilter { $Name -eq $longName }
+        }
+
+        It 'gives the same guidance, not an unsafe-name refusal' {
+            $zp = New-TestZip -Path (Join-TestPath $lp 'unresolved.zip') -Entries ([ordered]@{ $longName = 'synthetic'; 'C/Windows/a.evtx' = 'synthetic' })
+            $dest = Join-TestPath $lp 'unresolved-out'
+            $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+            $m | Should -BeExactly "unresolved.zip can't be extracted here: one of its names is 305 characters, longer than the 255 Windows allows. Extract it yourself with a tool that can shorten or skip that entry, put the extracted folder in InputRoot, and rerun."
+            Test-Path -LiteralPath $dest | Should -BeFalse
+        }
+
+        It 'still refuses an unsafe name in the same archive as unsafe' {
+            $zp = New-TestZip -Path (Join-TestPath $lp 'unresolved-slip.zip') -Entries ([ordered]@{ $longName = 'synthetic'; 'a/../../evil.txt' = 'synthetic' })
+            $dest = Join-TestPath $lp 'unresolved-slip-out'
+            $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+            $m | Should -BeLike "Archive refused, 1 unsafe entry name(s): 'a/../../evil.txt': parent directory segment"
+            Test-Path -LiteralPath $dest | Should -BeFalse
+        }
+    }
+
+    It 'describes the failure without throwing, whatever it is given' {
+        $none = Get-ZipPathMeasure -Archive $null -Destination $null
+        $none.LongestPath | Should -Be 0
+        $none.LongestName | Should -Be 0
+        $odd = Get-ZipPathMeasure -Archive ([pscustomobject]@{ Entries = @([pscustomobject]@{ FullName = $null }, 'not an entry') }) -Destination 'D:\Out'
+        $odd.LongestPath | Should -BeGreaterOrEqual 0
+        Get-LongPathGuidance -Source 'HOST{1}.zip' -Measure $none | Should -BeExactly "HOST{1}.zip can't be extracted here: some of its paths are longer than Windows allows. Point OutputRoot at a shorter folder such as D:\Out, or extract it yourself nearer the drive root, put the extracted folder in InputRoot, and rerun."
+        Get-LongPathGuidance -Source 'X{0}.zip' -Measure ([pscustomobject]@{ LongestPath = 400; LongestName = 300 }) | Should -BeLike 'X{0}.zip*one of its names is 300 characters*'
+        Get-LongPathGuidance -Source 'Y.zip' -Measure ([pscustomobject]@{ LongestPath = 287; LongestName = 40 }) | Should -BeLike '*(the longest needs 287 characters)*'
+    }
+
+    It 'adds the extended-length prefix on Windows only, and only when needed' {
+        $short = 'C:\Case\Out\_work\HOST01'
+        $long = 'C:\Case\' + ('a' * 250)
+        $unc = '\\server\share\' + ('b' * 250)
+        Get-ExtendedLengthPath -Path $short | Should -BeExactly $short
+        if ($TestOnWindows) {
+            Get-ExtendedLengthPath -Path $long | Should -BeExactly ('\\?\' + $long)
+            Get-ExtendedLengthPath -Path $unc | Should -BeExactly ('\\?\UNC\server\share\' + ('b' * 250))
+            Get-ExtendedLengthPath -Path $short -Always | Should -BeExactly ('\\?\' + $short)
+            Get-ExtendedLengthPath -Path ('\\?\' + $long) | Should -BeExactly ('\\?\' + $long)
+        }
+        else {
+            Get-ExtendedLengthPath -Path $long | Should -BeExactly $long
+            Get-ExtendedLengthPath -Path $short -Always | Should -BeExactly $short
+        }
+        ConvertFrom-ExtendedLengthPath -Path ('\\?\' + $long) | Should -BeExactly $long
+        ConvertFrom-ExtendedLengthPath -Path '\\?\UNC\server\share\x' | Should -BeExactly '\\server\share\x'
+        ConvertFrom-ExtendedLengthPath -Path $short | Should -BeExactly $short
+    }
+}

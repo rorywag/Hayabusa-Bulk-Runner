@@ -169,6 +169,11 @@ function Resolve-RunSetting {
         one or the other, not both. If the config sets ExactLevel and
         -MinLevel is given on the command line, the command line wins and
         ExactLevel is dropped.
+
+        IncludeTags and ExcludeTags are mutually exclusive too: Hayabusa
+        4.1.0 refuses --include-tag together with --exclude-tag, so every
+        collection would fail. Both keys may be present, as in the example
+        config, as long as at most one holds any tags.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -190,6 +195,11 @@ function Resolve-RunSetting {
 
     if ($configValues.ContainsKey('MinLevel') -and $configValues.ContainsKey('ExactLevel')) {
         throw "Config file $($Config.Path) sets both MinLevel and ExactLevel. Set one or the other."
+    }
+    $configInclude = @(ConvertTo-TagList -Name 'IncludeTags' -Value $configValues['IncludeTags'])
+    $configExclude = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $configValues['ExcludeTags'])
+    if ($configInclude.Count -gt 0 -and $configExclude.Count -gt 0) {
+        throw "Config file $($Config.Path) sets both IncludeTags and ExcludeTags. Hayabusa 4.1.0 accepts only one of them, so set IncludeTags or ExcludeTags, not both."
     }
 
     $defaults = @{
@@ -250,10 +260,6 @@ function Resolve-RunSetting {
 
     [string[]]$includeTags = @(ConvertTo-TagList -Name 'IncludeTags' -Value $values['IncludeTags'])
     [string[]]$excludeTags = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $values['ExcludeTags'])
-    $overlap = @($includeTags | Where-Object { $excludeTags -contains $_ })
-    if ($overlap.Count -gt 0) {
-        throw "Tag(s) appear in both IncludeTags and ExcludeTags: $($overlap -join ', ')"
-    }
 
     $timelineStart = $null
     $timelineEnd = $null

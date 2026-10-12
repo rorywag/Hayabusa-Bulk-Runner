@@ -7,6 +7,7 @@
 #             FAKE_HELP_MODE=indented indents the banner, FAKE_VERSION_FAIL
 #             writes to stderr and exits 1.
 # --version   is rejected, as 4.1.0 does.
+# --include-tag with --exclude-tag is rejected with 4.1.0's error, exit 2.
 # otherwise   reads fake.behavior from the -d folder (EXIT=, CSV=, STDERR=),
 #             copies the named CSV to -o, writes a stub report to -H, records
 #             its arguments beside -o and appends -d to FAKE_CALLS if set.
@@ -43,6 +44,12 @@ if ($argv.Count -gt 0 -and $argv[0] -eq 'help') {
         exit 1
     }
     exit 0
+}
+
+# Hayabusa 4.1.0 refuses the two tag filters together, before doing any work.
+if ($argv -ccontains '--include-tag' -and $argv -ccontains '--exclude-tag') {
+    [Console]::Error.WriteLine("error: the argument '--include-tag <TAG...>' cannot be used with '--exclude-tag <TAG...>'")
+    exit 2
 }
 
 $inputPath = $null

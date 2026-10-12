@@ -66,8 +66,9 @@ function New-HayabusaArgument {
         splatting, never joined into a command string.
 
         Exactly one of -m (MinLevel) or -e (ExactLevel) is included. Tags
-        are passed as one comma-separated value per flag. The time window
-        and thread count are only included when set.
+        are passed as one comma-separated value per flag, and at most one
+        of --include-tag or --exclude-tag, since Hayabusa 4.1.0 refuses the
+        pair. The time window and thread count are only included when set.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory array only.')]
     [CmdletBinding()]
@@ -126,10 +127,13 @@ function New-HayabusaArgument {
     }
 
     $include = @($Selection['IncludeTags'] | Where-Object { -not [string]::IsNullOrEmpty($_) })
+    $exclude = @($Selection['ExcludeTags'] | Where-Object { -not [string]::IsNullOrEmpty($_) })
+    if ($include.Count -gt 0 -and $exclude.Count -gt 0) {
+        throw 'Set IncludeTags or ExcludeTags, not both. Hayabusa 4.1.0 refuses --include-tag with --exclude-tag.'
+    }
     if ($include.Count -gt 0) {
         $list.Add('--include-tag'); $list.Add(($include -join ','))
     }
-    $exclude = @($Selection['ExcludeTags'] | Where-Object { -not [string]::IsNullOrEmpty($_) })
     if ($exclude.Count -gt 0) {
         $list.Add('--exclude-tag'); $list.Add(($exclude -join ','))
     }

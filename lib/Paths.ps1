@@ -1,3 +1,8 @@
+# Paths this long or longer get the \\?\ prefix on Windows. Windows file
+# APIs stop at 260 characters for a file and 248 for a folder unless long
+# paths are turned on for the whole machine.
+$script:ExtendedPathThreshold = 240
+
 function ConvertTo-NormalizedPath {
     <#
     .SYNOPSIS
@@ -120,5 +125,133 @@ function Write-TextFileAtomic {
     }
     else {
         Move-Item -LiteralPath $temp -Destination $Path -Force
+    }
+}
+
+function Get-ExtendedLengthPath {
+    <#
+    .SYNOPSIS
+        Adds the \\?\ extended-length prefix on Windows when a path needs it.
+    .DESCRIPTION
+        With the prefix, Windows file APIs accept paths up to about 32,000
+        characters whatever the machine's long path setting. A path shorter
+        than the threshold, one already prefixed, and any path on another
+        platform come back unchanged, unless -Always is given. The path must
+        already be full and normalised, because the prefix also turns off
+        Windows' own path normalisation.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [switch]$Always
+    )
+
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+        return $Path
+    }
+    if ($Path.StartsWith('\\?\') -or $Path.StartsWith('\\.\')) {
+        return $Path
+    }
+    if (-not $Always -and $Path.Length -lt $script:ExtendedPathThreshold) {
+        return $Path
+    }
+    if ($Path.StartsWith('\\')) {
+        return '\\?\UNC\' + $Path.Substring(2)
+    }
+    return '\\?\' + $Path
+}
+
+function ConvertFrom-ExtendedLengthPath {
+    # Strips the prefix again, for paths shown to people or passed on.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if ($Path.StartsWith('\\?\UNC\')) {
+        return '\\' + $Path.Substring(8)
+    }
+    if ($Path.StartsWith('\\?\')) {
+        return $Path.Substring(4)
+    }
+    return $Path
+}
+
+function Remove-DirectoryTree {
+    <#
+    .SYNOPSIS
+        Deletes a folder and everything in it, including paths past 260
+        characters.
+    .DESCRIPTION
+        Deletes through the prefixed path on Windows, so a deep tree such as
+        an extracted KAPE ZIP can be removed. Falls back to the plain path
+        if this runtime refuses the prefix. Directory.Delete removes links
+        rather than following them. Callers check the folder's bounds and
+        ShouldProcess first.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Callers check ShouldProcess and the folder bounds first.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $long = Get-ExtendedLengthPath -Path $Path -Always
+    if ($long -ne $Path) {
+        try {
+            [System.IO.Directory]::Delete($long, $true)
+            return
+        }
+        catch [System.ArgumentException], [System.NotSupportedException] {
+            Write-Verbose "This runtime refused the extended-length path for $Path. Deleting with the plain path."
+        }
+    }
+    [System.IO.Directory]::Delete($Path, $true)
+}
+
+function Get-FileTree {
+    <#
+    .SYNOPSIS
+        Lists every file under a folder, at any depth, including paths past
+        260 characters.
+    .DESCRIPTION
+        Returns FullName, Name and Extension for each file, hidden and
+        system files included, with FullName given without the prefix.
+        Falls back to the plain path if this runtime refuses the prefix.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $all = [System.IO.SearchOption]::AllDirectories
+    $files = $null
+    $long = Get-ExtendedLengthPath -Path $Path -Always
+    if ($long -ne $Path) {
+        try {
+            $files = [System.IO.Directory]::GetFiles($long, '*', $all)
+        }
+        catch [System.ArgumentException], [System.NotSupportedException] {
+            Write-Verbose "This runtime refused the extended-length path for $Path. Listing with the plain path."
+        }
+    }
+    if ($null -eq $files) {
+        $files = [System.IO.Directory]::GetFiles($Path, '*', $all)
+    }
+
+    foreach ($f in $files) {
+        $plain = ConvertFrom-ExtendedLengthPath -Path $f
+        [pscustomobject]@{
+            FullName  = $plain
+            Name      = [System.IO.Path]::GetFileName($plain)
+            Extension = [System.IO.Path]::GetExtension($plain)
+        }
     }
 }

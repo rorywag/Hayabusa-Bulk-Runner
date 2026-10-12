@@ -66,6 +66,27 @@ Describe 'Engagement config' {
         Get-ThrownMessage { Resolve-With "@{ MinLevel='high'; ExactLevel='low' }" } | Should -BeLike '*both MinLevel and ExactLevel*'
     }
 
+    It 'rejects IncludeTags and ExcludeTags together when the config loads' {
+        $m = Get-ThrownMessage { Resolve-With "@{ IncludeTags=@('attack.execution'); ExcludeTags=@('attack.discovery') }" }
+        $m | Should -BeLike '*sets both IncludeTags and ExcludeTags*Hayabusa 4.1.0 accepts only one of them*'
+    }
+
+    It 'accepts <Name>' -ForEach @(
+        @{ Name = 'IncludeTags alone'; Body = "@{ IncludeTags=@('attack.execution','attack.persistence') }"; Include = @('attack.execution', 'attack.persistence'); Exclude = @() }
+        @{ Name = 'ExcludeTags alone'; Body = "@{ ExcludeTags='attack.discovery' }"; Include = @(); Exclude = @('attack.discovery') }
+        @{ Name = 'both keys present but empty'; Body = '@{ IncludeTags=@(); ExcludeTags=@() }'; Include = @(); Exclude = @() }
+        @{ Name = 'tags in one list and the other empty'; Body = "@{ IncludeTags=@('attack.execution'); ExcludeTags=@() }"; Include = @('attack.execution'); Exclude = @() }
+    ) {
+        $r = Resolve-With $Body
+        @($r.Selection.IncludeTags) | Should -Be $Include
+        @($r.Selection.ExcludeTags) | Should -Be $Exclude
+    }
+
+    It 'loads the example config, which has both tag keys empty' {
+        $example = Join-Path -Path $RepoRoot -ChildPath 'config/engagement.example.psd1'
+        { Resolve-RunSetting -CommandLine @{} -Config (Import-EngagementConfig -Path $example) -HayabusaPath $hb -WarningAction SilentlyContinue } | Should -Not -Throw
+    }
+
     It 'rejects unknown keys' {
         Get-ThrownMessage { Import-EngagementConfig -Path (Cfg 'typo.psd1' "@{ IncludeTag = @('x') }") } | Should -BeLike '*unknown key*IncludeTag*'
     }

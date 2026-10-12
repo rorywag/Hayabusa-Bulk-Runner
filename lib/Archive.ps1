@@ -3,6 +3,11 @@ $script:DiskImageExtensions = @('.vhd', '.vhdx')
 # Copy buffer for streaming extraction.
 $script:ExtractBufferSize = 81920
 
+# Windows path limits, used to tell a path-too-long failure from any other
+# file error: 260 characters for a plain path, 255 for a single name.
+$script:MaxPlainPathLength = 260
+$script:MaxPathNameLength = 255
+
 # Free space required beyond the archive's uncompressed size: 10 percent of
 # that size or 1 GB, whichever is larger.
 $script:FreeSpaceMarginFraction = 0.10
@@ -476,7 +481,10 @@ function Assert-ZipArchiveSafe {
         or the overall compression ratio is over its cap (zip bomb). The ratio
         is taken across the whole archive, not per entry, because empty
         pre-sized evtx files and fixed-size disk images legitimately compress
-        hundreds of times smaller. Returns the declared uncompressed total.
+        hundreds of times smaller. An entry whose path is too long to
+        resolve is not unsafe, but it can't be extracted, so its
+        PathTooLongException is thrown once the other checks pass. Returns
+        the declared uncompressed total.
     #>
     [CmdletBinding()]
     [OutputType([long])]
@@ -497,6 +505,7 @@ function Assert-ZipArchiveSafe {
     $total = [long]0
     $compressed = [long]0
     $problems = New-Object System.Collections.Generic.List[string]
+    $pathTooLong = $null
 
     foreach ($entry in $Archive.Entries) {
         $total += $entry.Length
@@ -514,7 +523,22 @@ function Assert-ZipArchiveSafe {
             Get-SafeEntryTarget -Destination $Destination -Name $entry.FullName | Out-Null
         }
         catch {
-            $problems.Add("'$($entry.FullName)': resolves outside the extraction folder")
+            # Windows PowerShell 5.1 can't resolve a name over 255
+            # characters at all. That entry can't be written either, so
+            # keep the error for the long-path guidance instead of calling
+            # the name unsafe.
+            $err = $_.Exception
+            while ($null -ne $err.InnerException) {
+                $err = $err.InnerException
+            }
+            if ($err -is [System.IO.PathTooLongException]) {
+                if ($null -eq $pathTooLong) {
+                    $pathTooLong = $err
+                }
+            }
+            else {
+                $problems.Add("'$($entry.FullName)': resolves outside the extraction folder")
+            }
         }
     }
 
@@ -532,6 +556,10 @@ function Assert-ZipArchiveSafe {
         if ($ratio -gt $MaxRatio) {
             throw ("Archive refused: overall compression ratio {0:N0}:1 is over the cap of {1:N0}:1 (ZipMaxRatio)." -f $ratio, $MaxRatio)
         }
+    }
+
+    if ($null -ne $pathTooLong) {
+        throw $pathTooLong
     }
 
     return $total
@@ -565,6 +593,80 @@ function Get-FreeSpace {
     }
 }
 
+function Get-ZipPathMeasure {
+    <#
+    .SYNOPSIS
+        The longest full path and the longest single name a ZIP would create
+        under Destination.
+    .DESCRIPTION
+        Used only to describe a path-too-long failure, so it must never
+        throw itself: it measures string lengths without calling any path
+        API, and returns zeros if anything about the archive can't be read.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [AllowNull()]
+        [object]$Archive,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Destination
+    )
+
+    $longestPath = 0
+    $longestName = 0
+    try {
+        $rootLength = ([string]$Destination).Length
+        $entries = @()
+        if ($null -ne $Archive) {
+            $entries = @($Archive.Entries | Where-Object { $null -ne $_ })
+        }
+        foreach ($entry in $entries) {
+            $name = [string]$entry.FullName
+            $length = $rootLength + 1 + $name.Length
+            if ($length -gt $longestPath) {
+                $longestPath = $length
+            }
+            foreach ($segment in $name.Split([char[]]@('/', '\'))) {
+                if ($segment.Length -gt $longestName) {
+                    $longestName = $segment.Length
+                }
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Could not measure the paths in the archive: $($_.Exception.Message)"
+    }
+    return [pscustomobject]@{ LongestPath = $longestPath; LongestName = $longestName }
+}
+
+function Get-LongPathGuidance {
+    # Guidance for a ZIP whose paths Windows can't create. Plain string
+    # interpolation of numbers already measured, no -f format string, so a
+    # name with braces in it can't make this fail while describing a failure.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$Measure
+    )
+
+    if ($Measure.LongestName -gt $script:MaxPathNameLength) {
+        return "$Source can't be extracted here: one of its names is $($Measure.LongestName) characters, longer than the $($script:MaxPathNameLength) Windows allows. " +
+        'Extract it yourself with a tool that can shorten or skip that entry, put the extracted folder in InputRoot, and rerun.'
+    }
+    $count = ''
+    if ($Measure.LongestPath -gt 0) {
+        $count = " (the longest needs $($Measure.LongestPath) characters)"
+    }
+    return "$Source can't be extracted here: some of its paths are longer than Windows allows$count. " +
+    'Point OutputRoot at a shorter folder such as D:\Out, or extract it yourself nearer the drive root, put the extracted folder in InputRoot, and rerun.'
+}
+
 function Expand-ZipArchiveSafe {
     <#
     .SYNOPSIS
@@ -576,6 +678,13 @@ function Expand-ZipArchiveSafe {
         declared, and the run stops if the running total passes the cap.
         Nothing is executed or interpreted. Destination must not exist. On
         any failure the partial extract is removed.
+
+        Deep paths, such as KAPE's WER report archives under ProgramData,
+        are written through the \\?\ extended-length prefix on Windows, so
+        they extract past the 260-character limit. A path that still can't
+        be created, such as a single name over 255 characters, or any long
+        path on a runtime that refuses the prefix, fails the extraction
+        with guidance instead of a raw .NET error.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([long])]
@@ -632,17 +741,17 @@ function Expand-ZipArchiveSafe {
             $target = Get-SafeEntryTarget -Destination $Destination -Name $entry.FullName
 
             if ($entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\')) {
-                [System.IO.Directory]::CreateDirectory($target) | Out-Null
+                [System.IO.Directory]::CreateDirectory((Get-ExtendedLengthPath -Path $target)) | Out-Null
                 continue
             }
 
-            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target)) | Out-Null
+            [System.IO.Directory]::CreateDirectory((Get-ExtendedLengthPath -Path ([System.IO.Path]::GetDirectoryName($target)))) | Out-Null
 
             $in = $null
             $out = $null
             try {
                 $in = $entry.Open()
-                $out = New-Object System.IO.FileStream($target, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+                $out = New-Object System.IO.FileStream((Get-ExtendedLengthPath -Path $target), [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
                 $entryWritten = [long]0
                 while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
                     $entryWritten += $read
@@ -666,7 +775,12 @@ function Expand-ZipArchiveSafe {
     }
     catch {
         if ($created -and (Test-Path -LiteralPath $Destination)) {
-            [System.IO.Directory]::Delete($Destination, $true)
+            try {
+                Remove-DirectoryTree -Path $Destination
+            }
+            catch {
+                Write-Warning "Could not remove the partial extract ${Destination}: $($_.Exception.Message). Teardown will try again."
+            }
         }
         # The discovery check should stop these first. If .NET still meets
         # an unsupported method or an encrypted entry, replace its raw
@@ -679,6 +793,18 @@ function Expand-ZipArchiveSafe {
             $name = [System.IO.Path]::GetFileName($Path)
             Write-Verbose "${name}: $($inner.Message)"
             throw "$name can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder, or the disk image inside it, in InputRoot, and rerun."
+        }
+
+        # A path Windows can't create, even with the extended-length prefix.
+        $measure = Get-ZipPathMeasure -Archive $archive -Destination $Destination
+        $tooLong = $inner -is [System.IO.PathTooLongException]
+        if (-not $tooLong -and ($measure.LongestPath -ge $script:MaxPlainPathLength -or $measure.LongestName -gt $script:MaxPathNameLength)) {
+            $tooLong = ($inner -is [System.IO.IOException] -or $inner -is [System.ArgumentException] -or $inner -is [System.NotSupportedException])
+        }
+        if ($tooLong) {
+            $name = [System.IO.Path]::GetFileName($Path)
+            Write-Verbose "${name}: $($inner.GetType().Name): $($inner.Message)"
+            throw (Get-LongPathGuidance -Source $name -Measure $measure)
         }
         throw
     }

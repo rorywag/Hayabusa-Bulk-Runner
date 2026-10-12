@@ -78,7 +78,8 @@ function Remove-CollectionExtract {
         Recursively removes an extract folder under WorkRoot.
     .DESCRIPTION
         Only a folder strictly inside WorkRoot is removed. Directory.Delete
-        removes links rather than following them.
+        removes links rather than following them. Paths past 260
+        characters are removed through the extended-length prefix.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -96,7 +97,7 @@ function Remove-CollectionExtract {
         return
     }
     if ($PSCmdlet.ShouldProcess($Path, 'Remove extract')) {
-        [System.IO.Directory]::Delete($Path, $true)
+        Remove-DirectoryTree -Path $Path
     }
 }
 
@@ -197,8 +198,14 @@ function Clear-StaleExtract {
     }
 
     if (Test-IsWindowsHost) {
-        $images = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue |
-                Where-Object { Test-DiskImageName -Name $_.Name })
+        $tree = @()
+        try {
+            $tree = @(Get-FileTree -Path $Path)
+        }
+        catch {
+            Write-Verbose "Could not list the leftover extract ${Path}: $($_.Exception.Message)"
+        }
+        $images = @($tree | Where-Object { Test-DiskImageName -Name $_.Name })
         foreach ($image in $images) {
             if (Test-ImageAttached -ImagePath $image.FullName) {
                 throw "Leftover extract $Path holds $($image.FullName), which is still attached. Dismount it and rerun."
@@ -300,7 +307,8 @@ function Resolve-CollectionInput {
                 Expand-ZipArchiveSafe -Path $Collection.SourcePath -Destination $extract -MaxUncompressedBytes $MaxUncompressedBytes -MaxRatio $MaxRatio | Out-Null
                 $result.ExtractPath = $extract
 
-                $files = @(Get-ChildItem -LiteralPath $extract -Recurse -File -Force)
+                # Listed with long-path support, since KAPE trees run deep.
+                $files = @(Get-FileTree -Path $extract)
                 $images = @($files | Where-Object { Test-DiskImageName -Name $_.Name })
                 $nested = @($files | Where-Object { $_.Extension -eq '.zip' })
 

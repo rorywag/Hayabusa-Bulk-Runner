@@ -28,11 +28,20 @@ Describe 'Argument builder' {
         ((New-HayabusaArgument @b -Selection (Sel @{ MinLevel = 'emergency' }) -Threads $null)[-2..-1] -join ' ') | Should -Be '-m emergency'
         ((New-HayabusaArgument @b -Selection (Sel @{ MinLevel = $null; ExactLevel = 'emergency' }) -Threads $null)[-2..-1] -join ' ') | Should -Be '-e emergency'
     }
-    It 'adds threads, tags and the time window only when set' {
-        $a = New-HayabusaArgument @b -Selection (Sel @{ Profile = 'verbose'; IncludeTags = [string[]]@('attack.credential_access', 'attack.lateral_movement'); ExcludeTags = [string[]]@('attack.discovery'); TimelineStart = '2026-01-01 00:00:00 +00:00'; TimelineEnd = '2026-01-31 23:59:59 +00:00' }) -Threads 8
+    It 'adds threads, include tags and the time window only when set' {
+        $a = New-HayabusaArgument @b -Selection (Sel @{ Profile = 'verbose'; IncludeTags = [string[]]@('attack.credential_access', 'attack.lateral_movement'); TimelineStart = '2026-01-01 00:00:00 +00:00'; TimelineEnd = '2026-01-31 23:59:59 +00:00' }) -Threads 8
         $a[6] | Should -Be 'verbose'
-        (($a | Select-Object -Skip 21) -join ' | ') | Should -BeExactly '--threads | 8 | --include-tag | attack.credential_access,attack.lateral_movement | --exclude-tag | attack.discovery | --timeline-start | 2026-01-01 00:00:00 +00:00 | --timeline-end | 2026-01-31 23:59:59 +00:00'
+        (($a | Select-Object -Skip 21) -join ' | ') | Should -BeExactly '--threads | 8 | --include-tag | attack.credential_access,attack.lateral_movement | --timeline-start | 2026-01-01 00:00:00 +00:00 | --timeline-end | 2026-01-31 23:59:59 +00:00'
+        $a | Should -Not -Contain '--exclude-tag'
         @(New-HayabusaArgument @b -Selection (Sel @{}) -Threads $null | Where-Object { $_ -like '--*' }).Count | Should -Be 0
+    }
+    It 'passes exclude tags alone as one comma-separated value' {
+        $a = New-HayabusaArgument @b -Selection (Sel @{ ExcludeTags = [string[]]@('attack.discovery', 'attack.collection') }) -Threads $null
+        (($a | Select-Object -Skip 21) -join ' | ') | Should -BeExactly '--exclude-tag | attack.discovery,attack.collection'
+        $a | Should -Not -Contain '--include-tag'
+    }
+    It 'refuses include and exclude tags together, as Hayabusa 4.1.0 does' {
+        Get-ThrownMessage { New-HayabusaArgument @b -Selection (Sel @{ IncludeTags = [string[]]@('a'); ExcludeTags = [string[]]@('b') }) -Threads $null } | Should -BeLike '*IncludeTags or ExcludeTags, not both*'
     }
     It 'keeps a path with spaces as one argument' {
         (New-HayabusaArgument -InputPath 'D:\Case Out\_work\HOST 1' -CsvPath 'c.csv' -HtmlPath 'h.html' -Selection (Sel @{}) -Threads $null)[2] | Should -BeExactly 'D:\Case Out\_work\HOST 1'
@@ -120,6 +129,15 @@ Describe 'Native capture' {
         @($lines | Where-Object { $_ -like 'Results Summary: fake run over*' }).Count | Should -Be 1
         $lines | Should -Contain '[stderr] [ERROR] rules failed'
         @($lines | Where-Object { $_ -match "$([char]27)" }).Count | Should -Be 0
+    }
+    It 'fails like Hayabusa 4.1.0 when given both tag filters' {
+        $in = New-FakeHost -InputRoot (Join-TestPath $TestDrive 'nc3') -Name 'H' -Behavior "EXIT=0`nCSV=none"
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'nco3')
+        $lines = New-Object System.Collections.Generic.List[string]
+        $exit = Invoke-NativeCapture -FilePath $hb -Argument @('dfir-timeline', '-d', $in, '-o', (Join-TestPath $o 'x.csv'), '--include-tag', 'a', '--exclude-tag', 'b') -OnLine { param($l) $lines.Add($l) }
+        $exit | Should -Be 2
+        $lines | Should -Contain "[stderr] error: the argument '--include-tag <TAG...>' cannot be used with '--exclude-tag <TAG...>'"
+        Test-Path -LiteralPath (Join-TestPath $o 'x.args') | Should -BeFalse
     }
     It 'does not stop on stderr under ErrorActionPreference Stop' {
         $ErrorActionPreference = 'Stop'
