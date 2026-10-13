@@ -11,22 +11,76 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Decide whether anything outside docs needs the PowerShell lint and tests.
+      # Docs-only changes still report analyze and test as green, they just skip
+      # the expensive steps. Manual and scheduled runs always run the full suite.
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          event="${{ github.event_name }}"
+          if [ "$event" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          elif [ "$event" = "push" ]; then
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          else
+            echo "event $event runs the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "no diff base, running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! changed="$(git diff --name-only "$base" "$head")"; then
+            echo "diff failed, running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"
+          echo "$changed"
+          if printf '%s\n' "$changed" | grep -vE '(^docs/|\.md$)' | grep -q .; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs-only change, skipping lint and tests"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   analyze:
     name: analyze
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
         with:
           persist-credentials: false
 
       - name: Install PSScriptAnalyzer
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser -Force
 
       - name: Run PSScriptAnalyzer
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: |
           Import-Module -Name PSScriptAnalyzer -RequiredVersion 1.23.0
@@ -41,6 +95,7 @@ jobs:
 
   test:
     name: test (${{ matrix.name }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -61,10 +116,12 @@ jobs:
         shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
         with:
           persist-credentials: false
 
       - name: Install Pester
+        if: needs.changes.outputs.code == 'true'
         run: |
           $ErrorActionPreference = 'Stop'
           $PSVersionTable | Format-Table -AutoSize | Out-String
@@ -76,6 +133,7 @@ jobs:
           Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
 
       - name: Run Pester
+        if: needs.changes.outputs.code == 'true'
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module -Name Pester -RequiredVersion 5.7.1
@@ -89,7 +147,7 @@ jobs:
           Invoke-Pester -Configuration $config
 
       - name: Upload test results
-        if: always()
+        if: ${{ always() && needs.changes.outputs.code == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-${{ matrix.name }}
