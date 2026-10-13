@@ -181,7 +181,7 @@ Everything lands under OutputRoot:
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
 | `triage_dashboard.html` | The dashboard |
 
-The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
+The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. Counts, report and timeline are only shown for a Completed or CompletedWithErrors host. A Failed host's files may be left from an earlier run, so it shows only its error and its log. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
 
 A collection whose results name more than one computer is never given just one of them. The manifest marks its host `[multiple]` with a count of each name, and the dashboard and `triage_hosts.csv` show the names as its host, up to three of them and then `+N` for the rest, for example `WS01, WS01.corp.local`. The dashboard tags it "multiple" and its notes list every name with its count. A severity tile with nothing in it is greyed out, so the levels that did fire stand out.
 
@@ -208,7 +208,7 @@ The manifest is the record of what's been done. On a rerun, hosts that are Compl
 |---|---|
 | Completed | Hayabusa exited cleanly. No detections is still Completed |
 | CompletedWithErrors | Hayabusa exited non-zero but still wrote a timeline. Counts are kept and the exit code is in Error |
-| Failed | The input couldn't be prepared, Hayabusa wrote nothing, the results couldn't be read, or teardown failed. After a teardown failure, the counts from a finished Hayabusa run are kept |
+| Failed | The input couldn't be prepared, Hayabusa wrote nothing, the results couldn't be read, or teardown failed. After a teardown failure, the manifest keeps the counts from a finished Hayabusa run, but the dashboard and triage CSVs leave them out, as they do for every Failed host |
 | Pending | Found but not run yet |
 | Running | Being run, or the run was interrupted |
 
