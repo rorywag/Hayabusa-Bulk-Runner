@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: |
           Import-Module -Name PSScriptAnalyzer -RequiredVersion 1.23.0
-          $findings = @(foreach ($path in './Invoke-BulkHayabusa.ps1', './Invoke-HayabusaRollup.ps1', './lib') {
+          $findings = @(foreach ($path in './Invoke-BulkHayabusa.ps1', './Invoke-HayabusaRollup.ps1', './Test-HayabusaCompatibility.ps1', './lib') {
               Invoke-ScriptAnalyzer -Path $path -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
           }) + @(Invoke-ScriptAnalyzer -Path ./tests -Recurse -Settings ./tests/PSScriptAnalyzerSettings.psd1)
           $findings | Format-Table -Property RuleName, Severity, ScriptName, Line, Message -AutoSize -Wrap | Out-String -Width 220

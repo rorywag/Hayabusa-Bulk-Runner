@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A compatibility self-test, `Test-HayabusaCompatibility.ps1`, that runs a Hayabusa binary against a generated sample and checks the flags, output columns and severity levels the tool relies on, plus a startup notice when the Hayabusa version differs from the tested one.
+
 ### Changed
 
 - README trimmed to a scannable front page. The full reference moved to `docs/USAGE.md`.

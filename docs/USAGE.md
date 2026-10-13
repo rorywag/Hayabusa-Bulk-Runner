@@ -185,6 +185,21 @@ Settings that should stay the same for a whole engagement go in a `.psd1` file p
 
 It's read as data only, so it can't run code. Unknown keys are rejected, so a typo can't silently drop a filter. A setting given on the command line wins over the config, which wins over the default, and run-meta records which one each setting came from. Real configs are git-ignored when they're under `config\` or named `engagement*.psd1` or `*.local.*`, and only the example is tracked. A config with any other name elsewhere in the repo, such as `case01.psd1` at the root, would be tracked, so keep it outside the repo or name it to match.
 
+## Checking a new Hayabusa release
+
+The tool is tested against Hayabusa 4.1.0, and a run with any other version starts with a warning saying so. Before using a new release on a case, run the compatibility self-test against the new binary and its rules:
+
+```powershell
+.\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.2.0\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.2.0\rules
+```
+
+It builds a one-event Security log in a temporary folder and runs Hayabusa over it three times, with arguments built by the same code as a real run, so between them every flag the tool can pass is sent. It then prints PASS or FAIL for each check: the version was read, every flag was sent, each run was accepted, the CSV has the `Level`, `Computer` and `RuleTitle` columns, and every `Level` value maps to one of the six severities. It exits 0 when everything passes and 1 otherwise. It needs Windows but not an elevated session, and `-KeepArtifacts` keeps the temporary folder with each run's CSV, report and log.
+
+The sample event is Security 1102, which Hayabusa's own "Log Cleared" rule detects at level high. A detection is needed because Hayabusa writes an empty CSV, with no header row, when it detects nothing, which leaves no columns to check. The `--exclude-tag` run drops that detection, so it also shows a clean run with no detections passes.
+
+- **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, and the Hayabusa version the README gives under Status and Requirements. No code change is needed.
+- **Red:** the FAIL line names the flag, column or level that changed, and for a refused flag, what Hayabusa said on stderr. Fix `New-HayabusaArgument` in `lib\Hayabusa.ps1`, or the result handling in `lib\Results.ps1`, then run the check again.
+
 ## Running the tests
 
 The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence.
@@ -194,13 +209,13 @@ Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPubl
 Invoke-Pester -Path .\tests
 ```
 
-Most of the suite runs anywhere. The end-to-end run with the fake binary needs Windows. `tests\Mount.Integration.Tests.ps1` builds a small VHDX, mounts it the same way a real run does, and checks the image's hash is unchanged afterwards. It only runs on Windows in an elevated session and skips everywhere else.
+Most of the suite runs anywhere. The end-to-end run with the fake binary needs Windows. `tests\Mount.Integration.Tests.ps1` builds a small VHDX, mounts it the same way a real run does, and checks the image's hash is unchanged afterwards. It only runs on Windows in an elevated session and skips everywhere else. `tests\Compatibility.Tests.ps1` also runs the self-test against a real Hayabusa when `HAYABUSA_COMPAT_PATH` is set to its `hayabusa.exe`, on Windows, and skips otherwise.
 
 Lint with [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer), which includes the Windows PowerShell 5.1 compatibility rules:
 
 ```powershell
 Install-Module PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser
-foreach ($p in '.\Invoke-BulkHayabusa.ps1', '.\Invoke-HayabusaRollup.ps1', '.\lib') {
+foreach ($p in '.\Invoke-BulkHayabusa.ps1', '.\Invoke-HayabusaRollup.ps1', '.\Test-HayabusaCompatibility.ps1', '.\lib') {
     Invoke-ScriptAnalyzer -Path $p -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
 }
 Invoke-ScriptAnalyzer -Path .\tests -Recurse -Settings .\tests\PSScriptAnalyzerSettings.psd1

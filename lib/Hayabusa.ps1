@@ -269,6 +269,11 @@ function Invoke-HayabusaProcess {
 # printed by help, for example "Hayabusa v4.1.0 - Suzumushi Release".
 $script:VersionLinePattern = '^\s*Hayabusa v\d+\.\d+'
 
+# The Hayabusa release this tool's flags, CSV handling and severity levels
+# were checked against. Test-HayabusaCompatibility.ps1 checks a new release;
+# when it passes, raise this and the README's tested-version line.
+$script:TestedHayabusaVersion = '4.1.0'
+
 function Get-HayabusaVersion {
     <#
     .SYNOPSIS
@@ -324,6 +329,52 @@ function Get-HayabusaVersion {
     }
 
     return $result
+}
+
+function Get-HayabusaVersionNumber {
+    <#
+    .SYNOPSIS
+        The dotted version number from a Hayabusa version line, or null.
+    .DESCRIPTION
+        "Hayabusa v4.1.0 - Suzumushi Release" gives 4.1.0.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$VersionLine
+    )
+
+    $m = [regex]::Match([string]$VersionLine, '\bv(\d+(?:\.\d+)+)')
+    if ($m.Success) {
+        return $m.Groups[1].Value
+    }
+    return $null
+}
+
+function Get-HayabusaVersionNotice {
+    <#
+    .SYNOPSIS
+        A one-line notice when the detected Hayabusa is not the tested
+        release, or null.
+    .DESCRIPTION
+        Nothing is returned when the versions match or the version could
+        not be read, since a failed read is already warned about.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$VersionLine
+    )
+
+    $number = Get-HayabusaVersionNumber -VersionLine $VersionLine
+    if ($null -eq $number -or $number -eq $script:TestedHayabusaVersion) {
+        return $null
+    }
+    return "Hayabusa $number is not the version this tool was tested with ($script:TestedHayabusaVersion). Run Test-HayabusaCompatibility.ps1 against it to check the flags, output columns and severity levels this tool relies on."
 }
 
 function Get-RulesVersion {

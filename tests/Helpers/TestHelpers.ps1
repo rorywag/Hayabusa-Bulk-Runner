@@ -10,8 +10,9 @@ $script:FixtureRoot = Join-Path -Path (Split-Path -Parent $PSScriptRoot) -ChildP
 $script:FakeHayabusaScript = Join-Path -Path $PSScriptRoot -ChildPath 'FakeHayabusa.ps1'
 $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHayabusa.ps1'
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
+$script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
-$script:LibOrder = @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')
+$script:LibOrder = @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility')
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }

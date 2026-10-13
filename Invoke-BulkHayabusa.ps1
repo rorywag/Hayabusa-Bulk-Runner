@@ -225,6 +225,10 @@ $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
 if ($null -ne $hayabusaVersion.Error) {
     Write-Warning "Could not read the Hayabusa version: $($hayabusaVersion.Error)"
 }
+$versionNotice = Get-HayabusaVersionNotice -VersionLine $hayabusaVersion.Version
+if ($null -ne $versionNotice) {
+    Write-Warning $versionNotice
+}
 $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
 Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
 
