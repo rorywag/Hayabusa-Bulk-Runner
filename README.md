@@ -95,7 +95,7 @@ Each of these is a complete command. Copy one and change the paths:
 
 A rerun skips hosts that already finished, whatever the settings. On a case that's already been run, add `-Force` so a new floor or config applies to those hosts too.
 
-`Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
+`.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary, and PowerShell's own `-?` shows the syntax. `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
 
 | Parameter | What it does |
 |---|---|

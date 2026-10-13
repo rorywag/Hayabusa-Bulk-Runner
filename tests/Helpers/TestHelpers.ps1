@@ -276,6 +276,30 @@ function New-RollupFixture {
     return $out
 }
 
+function Invoke-ScriptInNewProcess {
+    <#
+    Runs a script in a new, non-interactive process of the PowerShell that
+    is running the tests, from WorkingDirectory. A missing mandatory
+    parameter there is an error, never a prompt. Returns the output lines
+    and the exit code.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string[]]$Argument = @(),
+        [Parameter(Mandatory)][string]$WorkingDirectory
+    )
+    $exe = (Get-Process -Id $PID).Path
+    Push-Location -LiteralPath $WorkingDirectory
+    try {
+        $lines = @(& $exe -NoProfile -NonInteractive -File $Path @Argument 2>&1 | ForEach-Object { [string]$_ })
+        $code = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    return [pscustomobject]@{ Output = $lines; ExitCode = $code }
+}
+
 function Get-FileHashMap {
     # Hash of every file under a folder, keyed by full path.
     param([Parameter(Mandatory)][string]$Path)

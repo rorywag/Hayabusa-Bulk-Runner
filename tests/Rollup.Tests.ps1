@@ -213,6 +213,29 @@ Describe 'Rollup leaves its inputs alone' {
     }
 }
 
+Describe 'Quick help' {
+    BeforeAll {
+        $script:help = @(& $RollupScript -Help)
+        $script:helpDir = New-TestDirectory (Join-TestPath $TestDrive 'help-cwd')
+        $script:child = Invoke-ScriptInNewProcess -Path $RollupScript -Argument @('-h') -WorkingDirectory $helpDir
+    }
+
+    It 'prints the usage summary, as plain text only' {
+        $help[0] | Should -BeLike 'Invoke-HayabusaRollup.ps1: rebuilds *'
+        $help | Should -Contain 'Usage:'
+        @($help | Where-Object { $_ -like '  -OutputRoot *' }).Count | Should -Be 1
+        $help | Should -Contain '  .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output'
+        $help[-1] | Should -BeExactly 'For the complete help: Get-Help .\Invoke-HayabusaRollup.ps1 -Full'
+        @($help | Where-Object { $_ -isnot [string] }).Count | Should -Be 0
+        ($help -join "`n") | Should -Not -Match '[^\x09\x0A\x0D\x20-\x7E]'
+    }
+    It 'needs no OutputRoot with -h, exits 0 and writes nothing' {
+        $child.ExitCode | Should -Be 0
+        ($child.Output -join "`n").TrimEnd() | Should -BeExactly ($help -join "`n").TrimEnd()
+        @(Get-ChildItem -LiteralPath $helpDir -Force).Count | Should -Be 0
+    }
+}
+
 Describe 'Standalone regeneration' {
     BeforeAll {
         $script:copyHosts = [System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_hosts.csv'))
