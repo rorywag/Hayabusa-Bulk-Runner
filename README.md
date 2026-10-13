@@ -89,7 +89,7 @@ D:\Cases\Case01\
   engagement.psd1    the case's config, if it has one
 ```
 
-Always rerun into the same OutputRoot. The manifest in it is what lets a rerun skip the hosts already done and pick up the rest, so adding a late host, or a ZIP you've extracted by hand, is just the same command again. Pointing a rerun at a new folder starts the whole case from scratch.
+Always rerun into the same OutputRoot. Its manifest is what a rerun resumes from, as [Rerunning and resuming](#rerunning-and-resuming) explains, and pointing a rerun at a new folder starts the whole case from scratch.
 
 ## Screenshots
 
@@ -103,7 +103,7 @@ The console during the same run:
 
 ![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
 
-*Synthetic sample data, from the same made-up run.*
+*Progress lines and the end-of-run summary from the same run.*
 
 ## Input model
 
@@ -115,11 +115,11 @@ Each top-level entry in InputRoot is one collection, normally one host:
 
 Hayabusa recurses, so it doesn't matter how deep the logs are inside each entry.
 
-Everything else is skipped. KAPE's own `_ConsoleLog.txt`, `_CopyLog.csv` and `_SkipLog.csv` are skipped quietly. Any other loose file gets a warning. Links and junctions are skipped, since they could point outside InputRoot. So are `$RECYCLE.BIN` and `System Volume Information` if InputRoot is a drive root.
+Everything else is skipped: KAPE's own `_ConsoleLog.txt`, `_CopyLog.csv` and `_SkipLog.csv` quietly, any other loose file with a warning. Links and junctions are skipped too, since they could point outside InputRoot, and so are `$RECYCLE.BIN` and `System Volume Information` when InputRoot is a drive root.
 
 Each entry gets a collection name, used for its output folder: the entry name without the container extension, with anything outside `A-Z a-z 0-9 . _ -` replaced by `_`. Two entries that end up with the same name, say `HOST01` and `host01.zip`, stop the run before anything is written, and you rename one.
 
-The collection name isn't the host name. KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection whose results hold more than one `Computer` value shows as `[multiple]` in the manifest, with a count of each, rather than quietly picking one. A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
+The collection name isn't the host name: KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection with more than one `Computer` value is covered under [Outputs](#outputs). A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
 
 Things that trip people up, and get a warning:
 
@@ -139,21 +139,15 @@ WARNING: HOST07.zip can't be extracted by this tool (unsupported compression or 
   To include them, extract each one yourself, put the extracted folder in InputRoot, and rerun. Hosts already done are skipped.
 ```
 
-It's marked Failed, and the manifest and dashboard carry the same short message once:
+The host is marked Failed. The manifest and dashboard carry the same one-line message, and the technical detail, such as which entry uses which compression method, goes in that host's `HOST07_hayabusa.log`, linked from the dashboard.
 
-```
-HOST07.zip can't be extracted by this tool (unsupported compression or encryption). Extract it yourself, put the extracted folder in InputRoot, and rerun.
-```
-
-The technical detail, such as which entry uses which compression method, goes in that host's `HOST07_hayabusa.log`, linked from the dashboard.
-
-So: extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot in place of the ZIP, and rerun. Hosts already done are skipped. If the ZIP held a disk image, put the `.vhdx` or `.vhd` itself directly in InputRoot, not the folder around it, so it gets mounted.
+The fix is to extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot in place of the ZIP, and rerun. If the ZIP held a disk image, put the `.vhdx` or `.vhd` itself directly in InputRoot, not the folder around it, so it gets mounted.
 
 If the check can't make sense of a ZIP at all, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
 
 ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits. The defaults are 100 GB and 250:1, and both can be changed in the engagement config. Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
 
-Deep paths are fine. KAPE output can run past Windows' 260-character path limit, for example the crash reports under `C\ProgramData\Microsoft\Windows\WER\ReportArchive`. The tool writes, lists and removes the extract through Windows' extended-length paths, so those extract like anything else. If a path still can't be created, that collection fails with a message saying so. For a long path the fix is a shorter OutputRoot, such as `D:\Out`, or extracting the ZIP yourself nearer the drive root. A single name over 255 characters can't be created anywhere on Windows, so extract that ZIP yourself with a tool that can shorten or skip the entry, put the extracted folder in InputRoot, and rerun.
+Deep paths are fine. KAPE output can run past Windows' 260-character path limit, for example the crash reports under `C\ProgramData\Microsoft\Windows\WER\ReportArchive`. The tool writes, lists and removes the extract through Windows' extended-length paths, so those extract like anything else. If a path still can't be created, that collection fails with a message saying so. For a long path the fix is a shorter OutputRoot, such as `D:\Out`, or extracting the ZIP yourself nearer the drive root. A single name over 255 characters can't be created anywhere on Windows, so extract that ZIP yourself with a tool that can shorten or skip the entry, then apply the same fix as above.
 
 ## Disk images and elevation
 
@@ -163,12 +157,12 @@ Mounting a disk image needs an elevated session. If any collection is a disk ima
 
 The evidence is only ever read.
 
-- Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool creates a differencing disk under `OutputRoot\_diff`, with the evidence image as its parent, and mounts that. Windows replays the journal into the child, and the parent is only ever read. This has been checked on real KAPE output, with the parent's hash the same before and after.
+- Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool mounts a differencing disk under `OutputRoot\_diff` with the evidence image as its parent. Windows replays the journal into the child and the parent is only read, checked on real KAPE output with the parent's hash the same before and after.
 - An image that's already attached is refused, not reused or dismounted, since this run didn't attach it.
 - ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
 - After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point, and the tool only deletes inside its own `_work`, `_mnt` and `_diff` folders. If a dismount fails, everything after it is left in place and the error says what's still there.
 - OutputRoot can't be inside InputRoot, so output never lands next to the evidence.
-- Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out. The Outputs section has the detail.
+- Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out, as [Outputs](#outputs) describes.
 
 ## Outputs
 
@@ -187,7 +181,7 @@ Everything lands under OutputRoot:
 
 The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
 
-A collection whose results name more than one computer shows those names as its host in the dashboard and `triage_hosts.csv`, up to three of them and then `+N` for the rest, for example `WS01, WS01.corp.local`. The dashboard tags it "multiple" and its notes list every name with its count. A severity tile with nothing in it is greyed out, so the levels that did fire stand out.
+A collection whose results name more than one computer is never given just one of them. The manifest marks its host `[multiple]` with a count of each name, and the dashboard and `triage_hosts.csv` show the names as its host, up to three of them and then `+N` for the rest, for example `WS01, WS01.corp.local`. The dashboard tags it "multiple" and its notes list every name with its count. A severity tile with nothing in it is greyed out, so the levels that did fire stand out.
 
 Values a spreadsheet would treat as a formula, anything starting with `=`, `+`, `-`, `@`, a tab or a carriage return, get a leading `'` in the triage CSVs and the manifest, so opening them in Excel can't run anything. The tool strips that `'` again when it reads its own manifest back.
 
@@ -232,7 +226,7 @@ It's read as data only, so it can't run code. Unknown keys are rejected, so a ty
 
 ## Running the tests
 
-The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence. Every fixture is synthetic.
+The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence.
 
 ```powershell
 Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
