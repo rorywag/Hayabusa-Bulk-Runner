@@ -47,6 +47,16 @@ Describe 'diskpart script' {
     It 'creates a differencing child of the parent' {
         Get-DifferencingChildScript -ParentPath 'D:\Case\KAPE\HOST01.vhdx' -ChildPath 'D:\Case\Out\_diff\HOST01.vhdx' | Should -BeExactly 'create vdisk file="D:\Case\Out\_diff\HOST01.vhdx" parent="D:\Case\KAPE\HOST01.vhdx"'
     }
+    It 'refuses a <Which> path holding a non-ASCII character, naming it' -ForEach @(
+        @{ Which = 'parent'; Parent = ('D:\F' + [char]0x00E4 + 'lle\HOST01.vhdx'); Child = 'D:\Out\_diff\HOST01.vhdx' }
+        @{ Which = 'child'; Parent = 'D:\Case\KAPE\HOST01.vhdx'; Child = ('D:\F' + [char]0x00E4 + 'lle\_diff\HOST01.vhdx') }
+    ) {
+        $m = Get-ThrownMessage { Get-DifferencingChildScript -ParentPath $Parent -ChildPath $Child }
+        $m | Should -BeLike "*can't be passed to diskpart, which can't reliably read non-ASCII characters*only ASCII characters*"
+        $named = $Parent
+        if ($Which -eq 'child') { $named = $Child }
+        $m.Contains($named) | Should -BeTrue
+    }
     It 'refuses a path with a double quote' {
         Get-ThrownMessage { Get-DifferencingChildScript -ParentPath 'D:\a"b.vhdx' -ChildPath 'D:\c.vhdx' } | Should -BeLike '*double quote*'
     }

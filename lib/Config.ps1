@@ -196,6 +196,11 @@ function Resolve-RunSetting {
     if ($configValues.ContainsKey('MinLevel') -and $configValues.ContainsKey('ExactLevel')) {
         throw "Config file $($Config.Path) sets both MinLevel and ExactLevel. Set one or the other."
     }
+    foreach ($key in @('MinLevel', 'ExactLevel')) {
+        if ($configValues.ContainsKey($key) -and [string]::IsNullOrWhiteSpace([string]$configValues[$key])) {
+            throw "Config file $($Config.Path) sets $key to an empty value. Set it to a level such as 'high', or remove the line."
+        }
+    }
     $configInclude = @(ConvertTo-TagList -Name 'IncludeTags' -Value $configValues['IncludeTags'])
     $configExclude = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $configValues['ExcludeTags'])
     if ($configInclude.Count -gt 0 -and $configExclude.Count -gt 0) {

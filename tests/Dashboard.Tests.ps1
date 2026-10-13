@@ -22,7 +22,7 @@ Describe 'Evidence values in the dashboard' {
     It 'keeps the table structure intact' {
         [regex]::Matches($html, '<table>').Count | Should -Be 3
         [regex]::Matches($html, '</table>').Count | Should -Be 3
-        ([regex]::Match($html, '(?s)<h2 id="rules">.*?</tbody>').Value -split '<tr>').Count | Should -Be 16
+        ([regex]::Match($html, '(?s)<h2 id="rules">.*?</tbody>').Value -split '<tr>').Count | Should -Be 15
     }
     It 'has a CSP that forbids script, and no external references' {
         $html.Contains("<meta http-equiv=""Content-Security-Policy"" content=""default-src &#39;none&#39;; style-src &#39;unsafe-inline&#39;"">") | Should -BeTrue

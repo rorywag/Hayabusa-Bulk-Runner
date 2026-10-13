@@ -115,7 +115,7 @@ function Write-TextFileAtomic {
 
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
         try {
-            [System.IO.File]::Replace($temp, $Path, $null)
+            [System.IO.File]::Replace($temp, $Path, [NullString]::Value)
         }
         catch {
             # File.Replace is not supported on every file system, for

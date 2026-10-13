@@ -227,8 +227,9 @@ function Resolve-CollectionInput {
         OutputRoot\_diff, so the evidence image is never written.
         Zip: extracted to OutputRoot\_work\<collection> after safety checks.
         If the extract holds exactly one disk image, that image is mounted
-        the same way. Otherwise the extract is used as a loose folder.
-        Nothing deeper than this one level is unpacked.
+        the same way. Two or more disk images fail the collection. Otherwise
+        the extract is used as a loose folder. Nothing deeper than this one
+        level is unpacked.
 
         Returns Collection, Source, InputType, SourcePath, Path, ImagePath,
         ChildPath, ExtractPath, MountPath, Warnings, Teardown and
@@ -237,8 +238,8 @@ function Resolve-CollectionInput {
         stay on the discovered collection.
 
         Call Invoke-CollectionCleanup on the result in a finally block. If
-        resolution fails partway, the steps done so far are undone before
-        the error is rethrown.
+        resolution fails or is interrupted partway, the steps done so far
+        are undone before the error goes on up.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -279,6 +280,7 @@ function Resolve-CollectionInput {
         KeepArtifacts = $KeepArtifacts.IsPresent
     }
 
+    $prepared = $false
     try {
         switch ($Collection.InputType) {
             'Loose' {
@@ -336,16 +338,19 @@ function Resolve-CollectionInput {
                 }
             }
         }
+        $prepared = $true
     }
-    catch {
-        $original = $_
-        try {
-            Invoke-CollectionCleanup -Resolved $result
+    finally {
+        # In finally, not catch, so a partial setup is undone on Ctrl+C too:
+        # stopping a run skips catch blocks but still runs finally.
+        if (-not $prepared) {
+            try {
+                Invoke-CollectionCleanup -Resolved $result
+            }
+            catch {
+                Write-Warning $_.Exception.Message
+            }
         }
-        catch {
-            Write-Warning $_.Exception.Message
-        }
-        throw $original
     }
 
     return $result

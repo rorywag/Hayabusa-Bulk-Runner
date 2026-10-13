@@ -8,8 +8,9 @@
 #             writes to stderr and exits 1.
 # --version   is rejected, as 4.1.0 does.
 # --include-tag with --exclude-tag is rejected with 4.1.0's error, exit 2.
-# otherwise   reads fake.behavior from the -d folder (EXIT=, CSV=, STDERR=),
-#             copies the named CSV to -o, writes a stub report to -H, records
+# otherwise   reads fake.behavior from the -d folder (EXIT=, CSV=, HTML=,
+#             STDERR=), copies the named CSV to -o, writes a stub report to -H
+#             unless HTML=none, records
 #             its arguments beside -o and appends -d to FAKE_CALLS if set.
 
 $argv = @($args | ForEach-Object { [string]$_ })
@@ -71,7 +72,7 @@ if (-not [string]::IsNullOrEmpty($env:FAKE_CALLS) -and $null -ne $inputPath) {
     [System.IO.File]::AppendAllText($env:FAKE_CALLS, $inputPath + [Environment]::NewLine)
 }
 
-$behavior = @{ EXIT = '0'; CSV = 'none'; STDERR = '' }
+$behavior = @{ EXIT = '0'; CSV = 'none'; HTML = 'stub'; STDERR = '' }
 if ($null -ne $inputPath) {
     $behaviorFile = Join-Path -Path $inputPath -ChildPath 'fake.behavior'
     if (Test-Path -LiteralPath $behaviorFile) {
@@ -91,7 +92,7 @@ if (-not [string]::IsNullOrEmpty($behavior.STDERR)) {
 if ($behavior.CSV -ne 'none' -and $null -ne $csvPath) {
     Copy-Item -LiteralPath (Join-Path -Path $inputPath -ChildPath $behavior.CSV) -Destination $csvPath -Force
 }
-if ($null -ne $htmlPath) {
+if ($behavior.HTML -ne 'none' -and $null -ne $htmlPath) {
     [System.IO.File]::WriteAllText($htmlPath, '<html></html>')
 }
 $code = 0

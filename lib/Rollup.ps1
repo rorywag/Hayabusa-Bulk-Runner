@@ -20,9 +20,11 @@ $script:StatusPriority = @{
     'Completed'           = 5
 }
 
-# Only these rows have a per-host CSV worth reading. A Running row's CSV
-# may be half-written by an interrupted run.
-$script:ReadableStatuses = @('Completed', 'CompletedWithErrors', 'Failed')
+# Only these rows have results worth showing: counts, the report and the
+# timeline. A Failed row's files may be left from an earlier run, when a
+# rerun failed before Hayabusa ran, and a Running row's may be half-written
+# by an interrupted run. The log is linked for any row that has one.
+$script:ResultStatuses = @('Completed', 'CompletedWithErrors')
 
 # Host marker when the manifest has no Host, which is a clean host with no
 # detections at the severity floor, or a host that never produced results.
@@ -302,8 +304,10 @@ function Get-RollupData {
         Builds the cross-host view from the manifest and per-host CSVs.
     .DESCRIPTION
         Reads OutputRoot\run_manifest.csv and, for each row that is
-        Completed, CompletedWithErrors or Failed, that collection's
-        timeline CSV. Nothing is written and no host is rerun.
+        Completed or CompletedWithErrors, that collection's timeline CSV.
+        A Failed row is shown without counts, report or timeline, since its
+        files may be from an earlier run. Nothing is written and no host is
+        rerun.
 
         Hosts: one row per manifest row. A blank Host becomes [unknown]. A
         [multiple] Host is shown by its computer names when the CSV can be
@@ -351,7 +355,7 @@ function Get-RollupData {
 
         $detection = $null
         $readError = $null
-        if ($script:ReadableStatuses -contains $entry.Status -and (Test-Path -LiteralPath $paths.Csv -PathType Leaf)) {
+        if ($script:ResultStatuses -contains $entry.Status -and (Test-Path -LiteralPath $paths.Csv -PathType Leaf)) {
             try {
                 $detection = Read-HostDetection -CsvPath $paths.Csv
             }
@@ -397,14 +401,19 @@ function Get-RollupData {
             }
         }
 
-        # Links only for rows whose results are read. A Pending or Running
-        # row's files may be stale or half-written.
+        # Report and timeline only for rows whose results are read, as their
+        # files may otherwise be stale or half-written. The log, for any row
+        # that has one, as it's where a failure is explained.
+        $linkFiles = @()
+        if ($script:ResultStatuses -contains $entry.Status) {
+            $linkFiles += , @('Report', $paths.Html)
+            $linkFiles += , @('Timeline', $paths.Csv)
+        }
+        $linkFiles += , @('Log', $paths.Log)
         $links = [ordered]@{}
-        if ($script:ReadableStatuses -contains $entry.Status) {
-            foreach ($pair in @(@('Report', $paths.Html), @('Timeline', $paths.Csv), @('Log', $paths.Log))) {
-                if (Test-Path -LiteralPath $pair[1] -PathType Leaf) {
-                    $links[$pair[0]] = @($collection, (Split-Path -Path $pair[1] -Leaf))
-                }
+        foreach ($pair in $linkFiles) {
+            if (Test-Path -LiteralPath $pair[1] -PathType Leaf) {
+                $links[$pair[0]] = @($collection, (Split-Path -Path $pair[1] -Leaf))
             }
         }
 

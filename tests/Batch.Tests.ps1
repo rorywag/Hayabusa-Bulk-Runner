@@ -349,3 +349,61 @@ Describe 'Off Windows' {
         Test-Path -LiteralPath (Join-TestPath $R.Out '_work') | Should -BeFalse
     }
 }
+
+Describe 'A rerun where Hayabusa writes nothing' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:R = New-BatchRoot 'stale'
+        $h = New-FakeHost -InputRoot $R.In -Name 'H1' -Files @{ 'r.csv' = $good }
+        Invoke-TestBatch $R 'run1' | Out-Null
+        $script:first = (Get-ManifestRowMap $R)['H1']
+        $script:p = Get-CollectionOutputPath -OutputRoot $R.Out -Collection 'H1'
+        $script:hadFiles = (Test-Path -LiteralPath $p.Csv) -and (Test-Path -LiteralPath $p.Html)
+        Write-TestText -Path (Join-TestPath $h 'fake.behavior') -Line @('EXIT=2', 'CSV=none', 'HTML=none') | Out-Null
+        Invoke-TestBatch $R 'run2' -Force | Out-Null
+        $script:second = (Get-ManifestRowMap $R)['H1']
+        Invoke-Rollup -OutputRoot $R.Out -WarningAction SilentlyContinue | Out-Null
+        $script:hostRow = @(Import-Csv -LiteralPath (Join-TestPath $R.Out 'triage_hosts.csv') | Where-Object { $_.Collection -eq 'H1' })[0]
+        $script:html = [System.IO.File]::ReadAllText((Join-TestPath $R.Out 'triage_dashboard.html'))
+    }
+
+    It 'starts from a finished first run with a report and timeline' {
+        $first.Status | Should -Be 'Completed'
+        $first.Detections | Should -Be '3'
+        $hadFiles | Should -BeTrue
+    }
+    It 'records the -Force rerun Failed, with none of the first run''s counts' {
+        $second.RunId | Should -Be 'run2'
+        $second.Status | Should -Be 'Failed'
+        $second.Host | Should -Be ''
+        $second.Detections | Should -Be '0'
+        $second.Critical | Should -Be '0'
+        $second.Error | Should -BeLike 'Hayabusa exited with code 2.*No CSV was written.'
+    }
+    It 'removes the first run''s report and timeline before Hayabusa runs again' {
+        Test-Path -LiteralPath $p.Csv | Should -BeFalse
+        Test-Path -LiteralPath $p.Html | Should -BeFalse
+    }
+    It 'leaves no stale counts or report link in the rollup' {
+        $hostRow.Status | Should -Be 'Failed'
+        $hostRow.Total | Should -Be ''
+        $html.Contains('H1/H1_report.html') | Should -BeFalse
+        $html.Contains('H1/H1_timeline.csv') | Should -BeFalse
+    }
+}
+
+Describe 'A Running mark that fails when the final write succeeds' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:R = New-BatchRoot 'runmark'
+        New-FakeHost -InputRoot $R.In -Name 'H1' -Files @{ 'r.csv' = $good } | Out-Null
+        Mock Set-RunManifestEntry { throw 'manifest locked' } -ParameterFilter { $Status -eq 'Running' }
+        Invoke-TestBatch $R 'run1' | Out-Null
+        $script:row = (Get-ManifestRowMap $R)['H1']
+    }
+
+    It 'records Completed with no leftover error' {
+        $row.Status | Should -Be 'Completed'
+        $row.Error | Should -Be ''
+    }
+}

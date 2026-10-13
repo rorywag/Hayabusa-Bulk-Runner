@@ -154,3 +154,24 @@ Describe 'Path helpers' {
         Get-ThrownMessage { Write-TextFileAtomic -Path $d -Text 'x' } | Should -BeLike '*folder of that name is in the way*'
     }
 }
+
+Describe 'Atomic replace' {
+    It 'swaps an existing file with File.Replace, not the move fallback' {
+        Mock Move-Item { }
+        $p = Join-TestPath $TestDrive 'atomic.txt'
+        [System.IO.File]::WriteAllText($p, 'one')
+        Write-TextFileAtomic -Path $p -Text 'two'
+        [System.IO.File]::ReadAllText($p) | Should -BeExactly 'two'
+        Test-Path -LiteralPath ($p + '.tmp') | Should -BeFalse
+        Should -Invoke Move-Item -Times 0 -Exactly
+    }
+    It 'updates an existing manifest with File.Replace, not the move fallback' {
+        Mock Move-Item { }
+        $m = Join-TestPath $TestDrive 'atomic_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'A1' -Source 'A1' -RunId 'r' -InputType Loose -Status Completed
+        (Get-RunManifest -Path $m).Contains('A1') | Should -BeTrue
+        Test-Path -LiteralPath ($m + '.tmp') | Should -BeFalse
+        Should -Invoke Move-Item -Times 0 -Exactly
+    }
+}

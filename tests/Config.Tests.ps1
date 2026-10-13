@@ -71,6 +71,16 @@ Describe 'Engagement config' {
         $m | Should -BeLike '*sets both IncludeTags and ExcludeTags*Hayabusa 4.1.0 accepts only one of them*'
     }
 
+    It 'rejects <Key> set to <Label> when the config loads' -ForEach @(
+        @{ Key = 'MinLevel'; Label = 'null'; Body = '@{ MinLevel = $null }' }
+        @{ Key = 'ExactLevel'; Label = 'null'; Body = '@{ ExactLevel = $null }' }
+        @{ Key = 'MinLevel'; Label = 'an empty string'; Body = "@{ MinLevel = '' }" }
+        @{ Key = 'ExactLevel'; Label = 'blank'; Body = "@{ ExactLevel = ' ' }" }
+    ) {
+        $m = Get-ThrownMessage { Resolve-With $Body }
+        $m | Should -BeLike "*sets $Key to an empty value*"
+    }
+
     It 'accepts <Name>' -ForEach @(
         @{ Name = 'IncludeTags alone'; Body = "@{ IncludeTags=@('attack.execution','attack.persistence') }"; Include = @('attack.execution', 'attack.persistence'); Exclude = @() }
         @{ Name = 'ExcludeTags alone'; Body = "@{ ExcludeTags='attack.discovery' }"; Include = @(); Exclude = @('attack.discovery') }

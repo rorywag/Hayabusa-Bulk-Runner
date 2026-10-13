@@ -55,10 +55,13 @@ Describe 'triage_hosts.csv' {
         $byC.FAILNOCSV.Critical | Should -Be ''
         $byC.FAILNOCSV.Total | Should -Be ''
     }
-    It 'counts a Failed row that has a readable CSV' {
-        $byC.FAILCSV.High | Should -Be '1'
+    It 'leaves counts blank for a Failed row, even with a CSV on disk' {
+        $byC.FAILCSV.Status | Should -Be 'Failed'
         $byC.FAILCSV.Host | Should -Be 'WS04'
-        $byC.FAILCSV.TopRule | Should -Be 'RuleE'
+        $byC.FAILCSV.High | Should -Be ''
+        $byC.FAILCSV.Total | Should -Be ''
+        $byC.FAILCSV.TopRule | Should -Be ''
+        $rulesCsv.RuleTitle | Should -Not -Contain 'RuleE'
     }
     It 'counts CompletedWithErrors' {
         $byC.CWE.Status | Should -Be 'CompletedWithErrors'
@@ -80,6 +83,44 @@ Describe 'triage_hosts.csv' {
     It 'leaves an unreadable CSV blank and warns' {
         $byC.BADCSV.Total | Should -Be ''
         @($warns | Where-Object { $_ -like 'Rollup: BADCSV: *missing column(s) RuleTitle*' }).Count | Should -Be 1
+    }
+}
+
+Describe 'A Failed row with files left from an earlier run' {
+    BeforeAll {
+        # A rerun that failed while its input was prepared, before Hayabusa
+        # ran, so the previous run's timeline, report and log are still there.
+        $script:fo = New-TestDirectory (Join-TestPath $TestDrive 'failed-leftover')
+        $fm = Join-TestPath $fo 'run_manifest.csv'
+        Initialize-RunManifest -Path $fm | Out-Null
+        Set-RunManifestEntry -Path $fm -Collection 'H1' -Source 'H1' -RunId 'run2' -InputType Loose -Status Failed -ErrorMessage @('Resolve: could not attach the disk image')
+        $p = Get-CollectionOutputPath -OutputRoot $fo -Collection 'H1'
+        Write-TestText -Path $p.Csv -Line @($TimelineHeader, (New-TimelineRow -Computer 'WS07' -Level 'crit' -Title 'OldRule')) | Out-Null
+        Write-TestText -Path $p.Html -Line @('<html></html>') | Out-Null
+        Write-TestText -Path $p.Log -Line @('log') | Out-Null
+        $script:fHost = @((Get-RollupData -OutputRoot $fo).Hosts)[0]
+        Invoke-Rollup -OutputRoot $fo -WarningAction SilentlyContinue | Out-Null
+        $script:fRow = @(Import-Csv -LiteralPath (Join-TestPath $fo 'triage_hosts.csv'))[0]
+        $script:fRules = @(Import-Csv -LiteralPath (Join-TestPath $fo 'triage_rules.csv'))
+        $script:fHtml = [System.IO.File]::ReadAllText((Join-TestPath $fo 'triage_dashboard.html'))
+    }
+
+    It 'shows no counts or top rule from the leftover timeline' {
+        $fRow.Status | Should -Be 'Failed'
+        foreach ($level in @('Emergency', 'Critical', 'High', 'Medium', 'Low', 'Total', 'TopRule')) {
+            $fRow.$level | Should -Be '' -Because "$level comes from the earlier run"
+        }
+        @($fRules | Where-Object { $_.RuleTitle -eq 'OldRule' }).Count | Should -Be 0
+        $fHtml.Contains('OldRule') | Should -BeFalse
+    }
+    It 'links the log, but not the leftover report or timeline' {
+        (@($fHost.Links.Keys) -join ',') | Should -BeExactly 'Log'
+        $fHtml.Contains('H1/H1_hayabusa.log') | Should -BeTrue
+        $fHtml.Contains('H1/H1_report.html') | Should -BeFalse
+        $fHtml.Contains('H1/H1_timeline.csv') | Should -BeFalse
+    }
+    It 'keeps the row''s error' {
+        $fHtml.Contains('Resolve: could not attach the disk image') | Should -BeTrue
     }
 }
 
@@ -124,8 +165,8 @@ Describe 'triage_rules.csv' {
         @($rulesCsv | Where-Object { $_.Level -eq 'high' })[0].RuleTitle | Should -Be 'RuleB'
     }
     It 'has one row per rule and level' {
-        $rulesCsv.Count | Should -Be 14
-        $res.RuleCount | Should -Be 14
+        $rulesCsv.Count | Should -Be 13
+        $res.RuleCount | Should -Be 13
     }
 }
 
@@ -184,7 +225,7 @@ Describe 'Standalone regeneration' {
 
     It 'rebuilds identical CSVs and the same dashboard apart from the build time' {
         $regen.HostCount | Should -Be 11
-        $regen.RuleCount | Should -Be 14
+        $regen.RuleCount | Should -Be 13
         [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_hosts.csv'))) | Should -BeExactly ([Convert]::ToBase64String($copyHosts))
         [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-TestPath $out 'triage_rules.csv'))) | Should -BeExactly ([Convert]::ToBase64String($copyRules))
         $h2 = [System.IO.File]::ReadAllText((Join-TestPath $out 'triage_dashboard.html'))

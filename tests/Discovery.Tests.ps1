@@ -165,3 +165,18 @@ Describe 'ZIP peek during discovery' {
         $zc.PLAIN.Zip.Readable | Should -BeTrue
     }
 }
+
+Describe 'A ZIP entry name Windows cannot use in a path' {
+    It 'fails only that ZIP, with guidance naming it, and discovery carries on' {
+        $root = New-TestDirectory (Join-TestPath $TestDrive 'oddname')
+        New-TestDirectory (Join-TestPath $root 'GOOD' 'C' 'Windows' 'System32' 'winevt' 'Logs') | Out-Null
+        $zp = New-TestZip -Path (Join-TestPath $root 'ODD.zip') -Entries ([ordered]@{ 'C/Windows/a_b.evtx' = 'synthetic' })
+        Edit-ZipEntryName -Path $zp -From 'C/Windows/a_b.evtx' -To 'C/Windows/a|b.evtx'
+        $c = @(Get-InputCollection -InputRoot $root -WarningAction SilentlyContinue)
+        $c.Count | Should -Be 2
+        $odd = @($c | Where-Object { $_.Collection -eq 'ODD' })[0]
+        $odd.Zip.Readable | Should -BeFalse
+        @($odd.Warnings)[0] | Should -BeExactly "ODD.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+        @($c | Where-Object { $_.Collection -eq 'GOOD' }).Count | Should -Be 1
+    }
+}

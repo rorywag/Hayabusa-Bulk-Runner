@@ -1,13 +1,43 @@
 # Rows in these states are not run again unless -Force is given.
 $script:FinishedStatuses = @('Completed', 'CompletedWithErrors')
 
+function Remove-PreviousHostOutput {
+    <#
+    .SYNOPSIS
+        Removes a collection's earlier timeline and report before Hayabusa
+        runs for it again.
+    .DESCRIPTION
+        Without this, a rerun where Hayabusa writes nothing would be counted
+        from the previous run's CSV and linked to its report. Only the two
+        files Hayabusa writes are removed, from the collection's own output
+        folder. The log is rewritten by the run itself.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Path
+    )
+
+    foreach ($file in @($Path.Csv, $Path.Html)) {
+        if ((Test-Path -LiteralPath $file -PathType Leaf) -and $PSCmdlet.ShouldProcess($file, 'Remove the previous run''s output')) {
+            try {
+                [System.IO.File]::Delete($file)
+            }
+            catch {
+                throw "Could not remove the previous run's $([System.IO.Path]::GetFileName($file)) before running Hayabusa again: $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 function Invoke-CollectionRun {
     <#
     .SYNOPSIS
         Runs Hayabusa for one collection and records the outcome.
     .DESCRIPTION
         Marks the manifest row Running, creates the per-host output folder,
-        resolves the input, runs Hayabusa and parses the CSV. Teardown runs
+        resolves the input, removes the collection's earlier timeline and
+        report, runs Hayabusa and parses the CSV. Teardown runs
         in a finally block, and the final row is written after it so a
         teardown failure is recorded.
 
@@ -57,13 +87,16 @@ function Invoke-CollectionRun {
     }
 
     # A failure to mark the row Running is recorded and the run goes ahead.
-    # The final write below tries again.
+    # The final write below tries again, and only if that fails too is this
+    # recorded.
+    $runningMarkError = $null
     try {
         Set-RunManifestEntry -Path $ManifestPath -Collection $Collection.Collection -Source $Collection.Source `
             -RunId $RunId -InputType $Collection.InputType -Status 'Running' -WarningMessage @(Join-UniqueMessage -Message $warnings.ToArray())
     }
     catch {
-        $errors.Add("Could not mark the manifest row Running: $($_.Exception.Message)")
+        $runningMarkError = "Could not mark the manifest row Running: $($_.Exception.Message)"
+        Write-Verbose "$($Collection.Collection): $runningMarkError"
     }
 
     $paths = Get-CollectionOutputPath -OutputRoot $OutputRoot -Collection $Collection.Collection
@@ -101,6 +134,7 @@ function Invoke-CollectionRun {
 
         $arguments = New-HayabusaArgument -InputPath $resolvedInput.Path -CsvPath $paths.Csv -HtmlPath $paths.Html `
             -Selection $Resolved.Selection -Threads $Threads
+        Remove-PreviousHostOutput -Path $paths
         $exitCode = Invoke-HayabusaProcess -HayabusaPath $HayabusaPath -Argument $arguments -LogPath $paths.Log
         if ($exitCode -ne 0) {
             $errors.Add("Hayabusa exited with code $exitCode. See $($paths.Log).")
@@ -169,6 +203,9 @@ function Invoke-CollectionRun {
             -WarningMessage $finalWarnings -ErrorMessage $errors.ToArray() -DurationSec $timer.Elapsed.TotalSeconds
     }
     catch {
+        if ($null -ne $runningMarkError) {
+            $errors.Add($runningMarkError)
+        }
         $errors.Add("Recording the result failed: $($_.Exception.Message)")
         $status = 'Failed'
         try {

@@ -52,6 +52,12 @@ function Get-DifferencingChildScript {
         if ($p.Contains('"')) {
             throw "Path contains a double quote and cannot be passed to diskpart: $p"
         }
+        # diskpart misreads non-ASCII characters in a piped script, so it is
+        # refused here with a clear message instead of diskpart failing to
+        # find the path.
+        if ($p -match '[^\x20-\x7E]') {
+            throw "Path can't be passed to diskpart, which can't reliably read non-ASCII characters: $p. To mount disk images, use InputRoot and OutputRoot paths with only ASCII characters."
+        }
     }
     return "create vdisk file=`"$ChildPath`" parent=`"$ParentPath`""
 }
@@ -76,7 +82,9 @@ function New-DifferencingChild {
         Creates a differencing child of an image with diskpart.
     .DESCRIPTION
         diskpart rather than New-VHD, so Hyper-V is not needed. The script
-        is piped to diskpart's standard input. Success is checked twice:
+        is piped to diskpart's standard input as ASCII. A path with any
+        non-ASCII character is refused first with a clear message, since
+        diskpart misreads it. Success is checked twice:
         diskpart's exit code, and that the child file now exists. On failure
         diskpart's output is included in the error.
     #>
@@ -97,6 +105,10 @@ function New-DifferencingChild {
     }
 
     $ErrorActionPreference = 'Continue'
+    # PowerShell encodes text piped to a native program with $OutputEncoding.
+    # The script is plain ASCII, checked above, so it is sent as ASCII on
+    # every PowerShell.
+    $OutputEncoding = [System.Text.Encoding]::ASCII
     $output = @($script | & (Get-DiskpartPath) 2>&1 | ForEach-Object { [string]$_ })
     $exit = $LASTEXITCODE
 
