@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-14
+
 ### Added
 
 - A compatibility self-test, `Test-HayabusaCompatibility.ps1`, that runs a Hayabusa binary against a generated sample and checks the flags, output columns and severity levels the tool relies on, plus a startup notice when the Hayabusa version differs from the tested one.
@@ -48,7 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/releases/tag/v0.6.1
