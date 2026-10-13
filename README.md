@@ -65,6 +65,36 @@ With an engagement config and a lower severity floor:
     -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
 ```
 
+### Customising a run
+
+The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts and ConfigPath. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
+
+Each of these is a complete command. Copy one and change the paths:
+
+```powershell
+# Default triage run, floor at high. Start here on a new case.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+
+# Broader sweep, medium and up, when high is too narrow.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium
+
+# Cap Hayabusa at two threads, on a box that's busy with other work.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Threads 2
+
+# Rerun every host, finished ones included, after fixing something such as the rules.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Force
+
+# Keep extracted ZIPs and differencing disks, to debug a host that failed.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -KeepArtifacts
+
+# Engagement settings from a config: ExactLevel, tag filters, a time window and the output profile live there.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1
+```
+
+`-MinLevel` takes any of the six levels, informational, low, medium, high (the default), critical or emergency, and means that level and up.
+
+A rerun skips hosts that already finished, whatever the settings. On a case that's already been run, add `-Force` so a new floor or config applies to those hosts too.
+
 `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
 
 | Parameter | What it does |
@@ -222,7 +252,11 @@ To rebuild the triage files and dashboard from an existing OutputRoot without re
 
 ## Engagement config
 
-Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](config/engagement.example.psd1) and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits. Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
+Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](config/engagement.example.psd1), which lists every setting with a comment, and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits. Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
+
+`ExactLevel` sets a single level instead of a floor, for example only critical. MinLevel and ExactLevel are mutually exclusive: a config that sets both is refused, and `-MinLevel` on the command line replaces a config's ExactLevel.
+
+`Profile` takes `standard`, the default, or `verbose`. Verbose adds more detail per event to each host's timeline CSV: MITRE tactics and tags, other tags, and the rule and EVTX file names. The tool's counts and rollup only read Level, Computer and RuleTitle, which both profiles include, so the profile changes the per-host detail and never the rollup. Hayabusa's other profiles aren't accepted. The Timesketch ones, for example, rename RuleTitle to `message`, which the rollup can't read.
 
 It's read as data only, so it can't run code. Unknown keys are rejected, so a typo can't silently drop a filter. A setting given on the command line wins over the config, which wins over the default, and run-meta records which one each setting came from. Real configs are git-ignored when they're under `config\` or named `engagement*.psd1` or `*.local.*`, and only the example is tracked. A config with any other name elsewhere in the repo, such as `case01.psd1` at the root, would be tracked, so keep it outside the repo or name it to match.
 
