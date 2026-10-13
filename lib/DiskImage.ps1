@@ -45,12 +45,17 @@ function Get-DifferencingChildScript {
         [string]$ParentPath,
 
         [Parameter(Mandatory)]
-        [string]$ChildPath
+        [string]$ChildPath,
+
+        [System.Text.Encoding]$Encoding = (Get-DiskpartEncoding)
     )
 
     foreach ($p in @($ParentPath, $ChildPath)) {
         if ($p.Contains('"')) {
             throw "Path contains a double quote and cannot be passed to diskpart: $p"
+        }
+        if ($Encoding.GetString($Encoding.GetBytes($p)) -cne $p) {
+            throw "Path can't be passed to diskpart: its input code page ($($Encoding.CodePage)) has no form for some characters in $p. Use a path with only ASCII characters."
         }
     }
     return "create vdisk file=`"$ChildPath`" parent=`"$ParentPath`""
@@ -70,13 +75,37 @@ function Test-ImageAttached {
     return ($null -ne $state -and [bool]$state.Attached)
 }
 
+function Get-DiskpartEncoding {
+    <#
+    .SYNOPSIS
+        The encoding diskpart reads a piped script in.
+    .DESCRIPTION
+        diskpart decodes its standard input in the console's input code
+        page, not as UTF-8. Falls back to the OEM code page when there is
+        no console to ask.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Text.Encoding])]
+    param()
+
+    try {
+        return [Console]::InputEncoding
+    }
+    catch {
+        return [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    }
+}
+
 function New-DifferencingChild {
     <#
     .SYNOPSIS
         Creates a differencing child of an image with diskpart.
     .DESCRIPTION
         diskpart rather than New-VHD, so Hyper-V is not needed. The script
-        is piped to diskpart's standard input. Success is checked twice:
+        is piped to diskpart's standard input, encoded in the code page
+        diskpart reads it in, so a path with non-ASCII characters arrives
+        intact or is refused first with a clear message. Success is checked
+        twice:
         diskpart's exit code, and that the child file now exists. On failure
         diskpart's output is included in the error.
     #>
@@ -90,13 +119,17 @@ function New-DifferencingChild {
     )
 
     Assert-MountSupported
-    $script = Get-DifferencingChildScript -ParentPath $ParentPath -ChildPath $ChildPath
+    $encoding = Get-DiskpartEncoding
+    $script = Get-DifferencingChildScript -ParentPath $ParentPath -ChildPath $ChildPath -Encoding $encoding
 
     if (-not $PSCmdlet.ShouldProcess($ChildPath, "Create differencing child of $ParentPath")) {
         return
     }
 
     $ErrorActionPreference = 'Continue'
+    # PowerShell encodes text piped to a native program with $OutputEncoding,
+    # which is ASCII on Windows PowerShell 5.1.
+    $OutputEncoding = $encoding
     $output = @($script | & (Get-DiskpartPath) 2>&1 | ForEach-Object { [string]$_ })
     $exit = $LASTEXITCODE
 

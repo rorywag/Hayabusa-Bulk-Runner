@@ -31,8 +31,28 @@ function Test-DiskImageName {
         [string]$Name
     )
 
-    $ext = [System.IO.Path]::GetExtension($Name)
-    return ($script:DiskImageExtensions -contains $ext.ToLowerInvariant())
+    return ($script:DiskImageExtensions -contains (Get-EntryExtension -Name $Name))
+}
+
+function Get-EntryExtension {
+    # The extension of a ZIP entry or file name, in lower case with its dot,
+    # or empty. Plain string work: on Windows PowerShell 5.1,
+    # [System.IO.Path]::GetExtension throws for characters such as | or "
+    # that an archive made elsewhere can hold.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Name
+    )
+
+    $leaf = $Name.Substring($Name.LastIndexOfAny([char[]]@('/', '\')) + 1)
+    $dot = $leaf.LastIndexOf('.')
+    if ($dot -lt 0 -or $dot -eq $leaf.Length - 1) {
+        return ''
+    }
+    return $leaf.Substring($dot).ToLowerInvariant()
 }
 
 # .NET's ZIP reader handles only these compression methods.
@@ -241,8 +261,11 @@ function Get-ZipEntryInfo {
         Deflate, makes the ZIP unreadable (ReadReason Unsupported), since
         .NET cannot extract it. The rule is the same on Windows PowerShell
         5.1 and PowerShell 7. A central directory that cannot be parsed is
-        unreadable too (ReadReason Unparseable), never assumed fine. A ZIP
-        that passes but that .NET still cannot open is ReadReason Corrupt.
+        unreadable too (ReadReason Unparseable), never assumed fine. An
+        entry name holding a character no Windows path can use, such as |
+        or a control character, makes it unreadable as well (ReadReason
+        BadName). A ZIP that passes but that .NET still cannot open is
+        ReadReason Corrupt.
 
         Unreadable ZIPs are reported, not thrown, so discovery can guide the
         operator. Get-ZipGuidance builds the message.
@@ -273,6 +296,21 @@ function Get-ZipEntryInfo {
     if (-not $directory.Ok) {
         $info.ReadReason = 'Unparseable'
         $info.ReadError = "its central directory could not be read ($($directory.Error))"
+        return $info
+    }
+
+    # Checked before anything else looks at the names, so one odd entry
+    # fails this ZIP alone and can never stop discovery.
+    $badNames = @($directory.Entries | Where-Object { $_.Name -match '[\x00-\x1F"<>|]' })
+    if ($badNames.Count -gt 0) {
+        $shown = $badNames[0].Name -replace '[\x00-\x1F]', '?'
+        $why = "entry '$shown' holds a character Windows can't use in a path"
+        if ($badNames.Count -gt 1) {
+            $why += ", and $($badNames.Count - 1) more entr(ies) have the same problem"
+        }
+        $info.ReadReason = 'BadName'
+        $info.ReadError = $why
+        $info.EntryCount = @($directory.Entries).Count
         return $info
     }
 
@@ -308,7 +346,7 @@ function Get-ZipEntryInfo {
         foreach ($entry in $archive.Entries) {
             $uncompressed += $entry.Length
             $compressed += $entry.CompressedLength
-            $ext = [System.IO.Path]::GetExtension($entry.FullName).ToLowerInvariant()
+            $ext = Get-EntryExtension -Name $entry.FullName
             if ($script:DiskImageExtensions -contains $ext) {
                 $imageList.Add($entry.FullName)
             }
@@ -361,6 +399,9 @@ function Get-ZipReadReasonText {
 
     if ($Info.ReadReason -eq 'Unsupported') {
         return 'unsupported compression or encryption'
+    }
+    if ($Info.ReadReason -eq 'BadName') {
+        return "an entry name isn't valid on Windows"
     }
     return 'it could not be read, the file may be damaged'
 }
@@ -797,9 +838,23 @@ function Expand-ZipArchiveSafe {
 
         # A path Windows can't create, even with the extended-length prefix.
         $measure = Get-ZipPathMeasure -Archive $archive -Destination $Destination
+        # Only a failure that is about path length gets this guidance. Any
+        # other error, such as a full disk, a locked file or a duplicate
+        # entry, is rethrown with its own message.
         $tooLong = $inner -is [System.IO.PathTooLongException]
         if (-not $tooLong -and ($measure.LongestPath -ge $script:MaxPlainPathLength -or $measure.LongestName -gt $script:MaxPathNameLength)) {
-            $tooLong = ($inner -is [System.IO.IOException] -or $inner -is [System.ArgumentException] -or $inner -is [System.NotSupportedException])
+            if ($inner -is [System.IO.IOException]) {
+                # Windows reports a name or path past its limits as
+                # ERROR_FILENAME_EXCED_RANGE (206), or as ERROR_INVALID_NAME
+                # (123) for a single name over 255 characters.
+                $code = $inner.HResult -band 0xFFFF
+                $tooLong = ($code -eq 206 -or ($code -eq 123 -and $measure.LongestName -gt $script:MaxPathNameLength))
+            }
+            else {
+                # A runtime that refuses long or extended-length paths
+                # outright.
+                $tooLong = ($inner -is [System.ArgumentException] -or $inner -is [System.NotSupportedException])
+            }
         }
         if ($tooLong) {
             $name = [System.IO.Path]::GetFileName($Path)

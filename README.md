@@ -111,7 +111,7 @@ Each top-level entry in InputRoot is one collection, normally one host:
 
 - a folder: KAPE's loose output, used as is
 - a `.vhdx` or `.vhd`: a KAPE container image, mounted for the run
-- a `.zip`: extracted to a working folder. If it holds exactly one disk image, that image is mounted. Otherwise the extracted folder is used as loose output
+- a `.zip`: extracted to a working folder. If it holds one disk image, that image is mounted. A ZIP holding two or more disk images is warned about at the start and fails. Otherwise the extracted folder is used as loose output
 
 Hayabusa recurses, so it doesn't matter how deep the logs are inside each entry.
 
@@ -119,7 +119,7 @@ Everything else is skipped: KAPE's own `_ConsoleLog.txt`, `_CopyLog.csv` and `_S
 
 Each entry gets a collection name, used for its output folder: the entry name without the container extension, with anything outside `A-Z a-z 0-9 . _ -` replaced by `_`. Two entries that end up with the same name, say `HOST01` and `host01.zip`, stop the run before anything is written, and you rename one.
 
-The collection name isn't the host name: KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection with more than one `Computer` value is covered under [Outputs](#outputs). A host with no detections at the floor has nothing to take a name from and shows as `[unknown]`.
+The collection name isn't the host name: KAPE often names loose output after the drive, so the folder is just `C`. The Host column comes from the `Computer` field in Hayabusa's results instead. A collection with more than one `Computer` value is covered under [Outputs](#outputs). A host with no detections at the floor has nothing to take a name from: `triage_hosts.csv` shows it as `[unknown]`, the dashboard tags it "host unknown", and the manifest leaves its Host blank.
 
 Things that trip people up, and get a warning:
 
@@ -143,7 +143,7 @@ The host is marked Failed. The manifest and dashboard carry the same one-line me
 
 The fix is to extract the ZIP with 7-Zip or similar, put the extracted folder in InputRoot in place of the ZIP, and rerun. If the ZIP held a disk image, put the `.vhdx` or `.vhd` itself directly in InputRoot, not the folder around it, so it gets mounted.
 
-If the check can't make sense of a ZIP at all, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
+If the check can't make sense of a ZIP at all, or an entry name holds a character no Windows path can use, such as `|` or a control character, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
 
 ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits. The defaults are 100 GB and 250:1, and both can be changed in the engagement config. Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
 
@@ -160,8 +160,8 @@ The evidence is only ever read.
 - Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool mounts a differencing disk under `OutputRoot\_diff` with the evidence image as its parent. Windows replays the journal into the child and the parent is only read, checked on real KAPE output with the parent's hash the same before and after.
 - An image that's already attached is refused, not reused or dismounted, since this run didn't attach it.
 - ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
-- After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point, and the tool only deletes inside its own `_work`, `_mnt` and `_diff` folders. If a dismount fails, everything after it is left in place and the error says what's still there.
-- OutputRoot can't be inside InputRoot, so output never lands next to the evidence.
+- After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point. The tool only deletes inside its own `_work`, `_mnt` and `_diff` folders, plus a host's own previous report and timeline just before that host is rerun. If a dismount fails, everything after it is left in place and the error says what's still there.
+- OutputRoot is refused if its path is inside InputRoot, so output doesn't land next to the evidence.
 - Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out, as [Outputs](#outputs) describes.
 
 ## Outputs
@@ -193,20 +193,20 @@ Some folders under OutputRoot belong to the tool:
 
 | Folder | What it's for |
 |---|---|
-| `_runs` | One provenance record per run, never overwritten. Together they show what every row in the manifest was produced with |
+| `_runs` | One provenance record per run, written when the run starts and completed when it ends, and never overwritten by a later run. Together they show what every row in the manifest was produced with |
 | `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, unless `-KeepArtifacts` is given, so after a clean run without it this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
 | `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
 | `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
 ## Rerunning and resuming
 
-The manifest is the record of what's been done. On a rerun, hosts that are Completed or CompletedWithErrors are skipped, and everything else is tried again: Failed, Pending, and anything left Running by a run that was interrupted. `-Force` reruns the lot. So after fixing a problem, say extracting a ZIP the tool couldn't, just run the same command again.
+The manifest is the record of what's been done. On a rerun, hosts that are Completed or CompletedWithErrors are skipped, and everything else is tried again: Failed, Pending, and anything left Running by a run that was interrupted. `-Force` reruns the lot. Rerunning a host removes its previous report and timeline just before Hayabusa runs, so what's recorded is always that run's own result. So after fixing a problem, say extracting a ZIP the tool couldn't, just run the same command again.
 
 | Status | Meaning |
 |---|---|
 | Completed | Hayabusa exited cleanly. No detections is still Completed |
 | CompletedWithErrors | Hayabusa exited non-zero but still wrote a timeline. Counts are kept and the exit code is in Error |
-| Failed | Nothing usable: the input couldn't be prepared, Hayabusa wrote nothing, or the results couldn't be read |
+| Failed | The input couldn't be prepared, Hayabusa wrote nothing, the results couldn't be read, or teardown failed. After a teardown failure, the counts from a finished Hayabusa run are kept |
 | Pending | Found but not run yet |
 | Running | Being run, or the run was interrupted |
 
