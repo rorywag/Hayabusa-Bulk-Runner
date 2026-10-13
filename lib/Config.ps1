@@ -80,6 +80,29 @@ function ConvertTo-SeverityLevel {
     return $level
 }
 
+function Get-SeverityLevelNotice {
+    <#
+    .SYNOPSIS
+        A one-line notice when the severity level is emergency, or null.
+    .DESCRIPTION
+        No rule Hayabusa ships is level emergency, so a floor or exact
+        level of emergency loads no rules unless they have been raised with
+        level-tuning. That can be deliberate, so this warns rather than
+        refuses. Critical and below return nothing.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$Selection
+    )
+
+    if ($Selection['MinLevel'] -eq 'emergency' -or $Selection['ExactLevel'] -eq 'emergency') {
+        return 'Severity level is set to emergency, but no standard Hayabusa rule uses that level. Unless you have customised your rules to use emergency, no rules will load and every host will fail. Use critical instead to catch the most severe detections.'
+    }
+    return $null
+}
+
 function ConvertTo-TagList {
     [CmdletBinding()]
     [OutputType([string])]
@@ -209,7 +232,7 @@ function Resolve-RunSetting {
 
     $defaults = @{
         RulesPath            = (Join-Path -Path (Split-Path -Path $HayabusaPath -Parent) -ChildPath 'rules')
-        MinLevel             = 'high'
+        MinLevel             = 'medium'
         ExactLevel           = $null
         IncludeTags          = @()
         ExcludeTags          = @()

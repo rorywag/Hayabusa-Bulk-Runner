@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - README trimmed to a scannable front page. The full reference moved to `docs/USAGE.md`.
 - Dashboard section "Provenance" renamed to "Run details".
+- The default severity floor is now medium instead of high.
+- A run whose severity level resolves to emergency now warns at startup that no shipped Hayabusa rule is emergency, so the run matches nothing without level-tuning.
 
 ## [0.6.3] - 2026-10-13
 

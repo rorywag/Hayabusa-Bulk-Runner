@@ -129,7 +129,7 @@ Describe 'A run' {
         $m1.RunId | Should -Be $r1.RunId
         $m1.SchemaVersion | Should -Be 6
         $m1.Tool.Version | Should -Be '0.6.3'
-        $m1.Selection.MinLevel | Should -Be 'high'
+        $m1.Selection.MinLevel | Should -Be 'medium'
         $m1.Selection.ExactLevel | Should -BeNullOrEmpty
         $m1.SettingSource.MinLevel | Should -Be 'Default'
         $m1.Selection.Profile | Should -Be 'standard'

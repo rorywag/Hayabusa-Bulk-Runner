@@ -46,7 +46,7 @@
 
 .PARAMETER MinLevel
     Severity floor passed to Hayabusa: informational, low, medium, high,
-    critical or emergency. Defaults to high. When given on the
+    critical or emergency. Defaults to medium. When given on the
     command line it overrides MinLevel or ExactLevel from the config file.
 
 .PARAMETER Threads
@@ -93,7 +93,7 @@ param(
 
     [Parameter(ParameterSetName = 'Run')]
     [ValidateSet('informational', 'low', 'medium', 'high', 'critical', 'emergency')]
-    [string]$MinLevel = 'high',
+    [string]$MinLevel = 'medium',
 
     [Parameter(ParameterSetName = 'Run')]
     [ValidateRange(1, 256)]
@@ -132,7 +132,7 @@ if ($Help) {
         '  -HayabusaPath   Full path to hayabusa.exe'
         ''
         'Options:'
-        '  -MinLevel       Severity floor: informational, low, medium, high, critical or emergency. Default high'
+        '  -MinLevel       Severity floor: informational, low, medium, high, critical or emergency. Default medium'
         '  -Threads        Thread count passed to Hayabusa. Leave it out to let Hayabusa decide'
         '  -Force          Rerun hosts that already finished'
         '  -KeepArtifacts  Keep extracted ZIPs and differencing disks after each host, for debugging'
@@ -228,6 +228,10 @@ if ($null -ne $hayabusaVersion.Error) {
 $versionNotice = Get-HayabusaVersionNotice -VersionLine $hayabusaVersion.Version
 if ($null -ne $versionNotice) {
     Write-Warning $versionNotice
+}
+$levelNotice = Get-SeverityLevelNotice -Selection $resolved.Selection
+if ($null -ne $levelNotice) {
+    Write-Warning $levelNotice
 }
 $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
 Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."

@@ -15,7 +15,8 @@
 
     # Severity floor: informational, low, medium, high, critical or emergency.
     # Set MinLevel or ExactLevel, not both.
-    MinLevel = 'high'
+    # Medium is the default floor. Uncomment this line to set a different one.
+    # MinLevel = 'high'
     # ExactLevel = 'critical'
 
     # Sigma tag filters. Leave both empty to run all rules. Set one or the

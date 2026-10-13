@@ -11,6 +11,7 @@ BeforeAll {
     function script:Cfg([string]$Name, [string]$Body) {
         Write-TestText -Path (Join-TestPath $cfgDir $Name) -Line @($Body)
     }
+    $script:EmergencyNotice = 'Severity level is set to emergency, but no standard Hayabusa rule uses that level. Unless you have customised your rules to use emergency, no rules will load and every host will fail. Use critical instead to catch the most severe detections.'
     function script:Resolve-With([string]$Body, [hashtable]$CommandLine = @{}) {
         $c = Import-EngagementConfig -Path (Cfg ("c{0}.psd1" -f [guid]::NewGuid().ToString('N')) $Body)
         Resolve-RunSetting -CommandLine $CommandLine -Config $c -HayabusaPath $hb
@@ -18,9 +19,9 @@ BeforeAll {
 }
 
 Describe 'Resolve-RunSetting defaults' {
-    It 'uses high, standard, the rules folder beside the binary and the ZIP limits' {
+    It 'uses medium, standard, the rules folder beside the binary and the ZIP limits' {
         $r = Resolve-RunSetting -CommandLine @{} -Config $null -HayabusaPath $hb
-        $r.Selection.MinLevel | Should -Be 'high'
+        $r.Selection.MinLevel | Should -Be 'medium'
         $r.Selection.ExactLevel | Should -BeNullOrEmpty
         $r.Selection.Profile | Should -Be 'standard'
         $r.Selection.RulesPath | Should -Be (Join-TestPath $tool 'rules')
@@ -143,5 +144,30 @@ Describe 'Emergency level in settings' {
     It 'the main script -MinLevel accepts emergency' {
         $p = (Get-Command $MainScript).Parameters['MinLevel']
         ($p.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues | Should -Contain 'emergency'
+    }
+
+    It 'warns that no shipped rule is emergency when MinLevel is emergency' {
+        $sel = (Resolve-RunSetting -CommandLine @{ MinLevel = 'emergency' } -Config $null -HayabusaPath $hb).Selection
+        Get-SeverityLevelNotice -Selection $sel | Should -BeExactly $EmergencyNotice
+    }
+
+    It 'warns the same when ExactLevel is emergency' {
+        Get-SeverityLevelNotice -Selection (Resolve-With "@{ ExactLevel = 'Emergency' }").Selection | Should -BeExactly $EmergencyNotice
+    }
+
+    It 'gives no notice for <Case>' -ForEach @(
+        @{ Case = 'the default floor'; Body = $null }
+        @{ Case = 'MinLevel critical'; Body = "@{ MinLevel = 'critical' }" }
+        @{ Case = 'MinLevel informational'; Body = "@{ MinLevel = 'informational' }" }
+        @{ Case = 'ExactLevel critical'; Body = "@{ ExactLevel = 'critical' }" }
+        @{ Case = 'ExactLevel low'; Body = "@{ ExactLevel = 'low' }" }
+    ) {
+        if ($null -eq $Body) {
+            $sel = (Resolve-RunSetting -CommandLine @{} -Config $null -HayabusaPath $hb).Selection
+        }
+        else {
+            $sel = (Resolve-With $Body).Selection
+        }
+        Get-SeverityLevelNotice -Selection $sel | Should -BeNullOrEmpty
     }
 }

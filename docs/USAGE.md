@@ -4,9 +4,8 @@ Reference for Hayabusa-Bulk-Runner. For what the tool is, how to get it and a fi
 
 ## Not yet confirmed on Windows
 
-The tool has been run against real Hayabusa 4.1.0 and KAPE images and ZIPs. Each of these three behaviours depends on something the evidence so far didn't have, so treat them as unconfirmed until you've seen them hold:
+The tool has been run against real Hayabusa 4.1.0 and KAPE images and ZIPs. Each of these two behaviours depends on something the evidence so far didn't have, so treat them as unconfirmed until you've seen them hold:
 
-- The emergency Level string as Hayabusa writes it in the CSV. None of the data produced an emergency detection. Both `emer` and `emergency` are accepted until it's seen.
 - Volume checks on `\\?\Volume{...}\` paths when an image has more than one volume. Every image tested had one.
 - The `_mnt` folder fallback, used when Windows gives the mounted image no drive letter: that Hayabusa accepts the folder path as `-d`, and that teardown removes it. Every image tested got a drive letter.
 
@@ -19,14 +18,14 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 | `-InputRoot` | Parent folder holding one entry per host |
 | `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot |
 | `-HayabusaPath` | Full path to `hayabusa.exe` |
-| `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default high |
+| `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default medium |
 | `-Threads` | Passed to Hayabusa. Leave it out to let Hayabusa decide |
 | `-Force` | Rerun hosts that already finished |
 | `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
 | `-ConfigPath` | Engagement config file, see below |
 | `-Help` | Print a usage summary and exit. `-h` is the same |
 
-`-MinLevel` takes any of the six levels, informational, low, medium, high (the default), critical or emergency, and means that level and up.
+`-MinLevel` takes any of the six levels, informational, low, medium (the default), high, critical or emergency, and means that level and up.
 
 A rerun skips hosts that already finished, whatever the settings. On a case that's already been run, add `-Force` so a new floor or config applies to those hosts too.
 
@@ -37,11 +36,11 @@ Add `-Verbose` for more detail as the run goes. `-InformationAction SilentlyCont
 Each of these is a complete command. Copy one and change the paths:
 
 ```powershell
-# Default triage run, floor at high. Start here on a new case.
+# Default triage run, floor at medium. Start here on a new case.
 .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 
-# Broader sweep, medium and up, when high is too narrow.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium
+# Narrow to high-confidence detections only, when medium is too noisy.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel high
 
 # Cap Hayabusa at two threads, on a box that's busy with other work.
 .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Threads 2
@@ -180,6 +179,8 @@ To rebuild the triage files and dashboard from an existing OutputRoot without re
 Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](../config/engagement.example.psd1), which lists every setting with a comment, and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits. Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
 
 `ExactLevel` sets a single level instead of a floor, for example only critical. MinLevel and ExactLevel are mutually exclusive: a config that sets both is refused, and `-MinLevel` on the command line replaces a config's ExactLevel.
+
+No rule Hayabusa ships is emergency level. Emergency only appears when level-tuning raises a rule to it, so a `MinLevel` or `ExactLevel` of emergency matches nothing unless your rules have been raised that way. The tool warns at startup when either is set to emergency, and the run carries on. When reading results, both `emer` and `emergency` are accepted as the emergency level.
 
 `Profile` takes `standard`, the default, or `verbose`. Verbose adds more detail per event to each host's timeline CSV: MITRE tactics and tags, other tags, and the rule and EVTX file names. The tool's counts and rollup only read Level, Computer and RuleTitle, which both profiles include, so the profile changes the per-host detail and never the rollup. Hayabusa's other profiles aren't accepted. The Timesketch ones, for example, rename RuleTitle to `message`, which the rollup can't read.
 
