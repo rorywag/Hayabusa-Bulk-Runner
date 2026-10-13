@@ -253,4 +253,6 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). Hayabusa is a separate project under its own licence. This tool calls it as an external program and doesn't include any of its code.
+MIT. See [LICENSE](LICENSE).
+
+This tool is independent and is not affiliated with or endorsed by Yamato Security. It runs Hayabusa as a separate external program and includes none of its code. Hayabusa is published by Yamato Security under the GNU AGPL-3.0, and its detection rules under their own licences. Download Hayabusa and its rules from Yamato Security.
