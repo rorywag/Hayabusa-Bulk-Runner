@@ -19,6 +19,34 @@ BeforeAll {
     $script:in = New-Input 'in'
 }
 
+Describe 'Quick help' {
+    BeforeAll {
+        $script:help = @(& $MainScript -Help)
+        $script:helpDir = New-TestDirectory (Join-TestPath $TestDrive 'help-cwd')
+        $script:child = Invoke-ScriptInNewProcess -Path $MainScript -Argument @('-Help') -WorkingDirectory $helpDir
+    }
+
+    It 'prints the usage summary, as plain text only' {
+        $help[0] | Should -BeLike 'Invoke-BulkHayabusa.ps1: runs Hayabusa across *'
+        $help | Should -Contain 'Usage:'
+        foreach ($name in 'InputRoot', 'OutputRoot', 'HayabusaPath', 'MinLevel', 'Threads', 'Force', 'KeepArtifacts', 'ConfigPath') {
+            @($help | Where-Object { $_ -like "  -$name *" }).Count | Should -Be 1 -Because "-$name has one line"
+        }
+        @($help | Where-Object { $_ -like '*-OutputRoot D:\Cases\Case01\Output*' }).Count | Should -BeGreaterThan 0
+        $help[-1] | Should -BeExactly 'For the complete help: Get-Help .\Invoke-BulkHayabusa.ps1 -Full'
+        @($help | Where-Object { $_ -isnot [string] }).Count | Should -Be 0
+        ($help -join "`n") | Should -Not -Match '[^\x09\x0A\x0D\x20-\x7E]'
+    }
+    It 'gives the same summary for -h' {
+        (@(& $MainScript -h) -join "`n") | Should -BeExactly ($help -join "`n")
+    }
+    It 'needs no other parameter, exits 0 and writes nothing' {
+        $child.ExitCode | Should -Be 0
+        ($child.Output -join "`n").TrimEnd() | Should -BeExactly ($help -join "`n").TrimEnd()
+        @(Get-ChildItem -LiteralPath $helpDir -Force).Count | Should -Be 0
+    }
+}
+
 Describe 'Checks before anything is written' {
     It 'refuses an OutputRoot inside InputRoot' {
         Get-ThrownMessage { & $MainScript -InputRoot $in -OutputRoot (Join-TestPath $in 'results') -HayabusaPath $hb } | Should -BeLike '*must not be inside InputRoot*'
@@ -100,7 +128,7 @@ Describe 'A run' {
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
         $m1.SchemaVersion | Should -Be 6
-        $m1.Tool.Version | Should -Be '0.6.2'
+        $m1.Tool.Version | Should -Be '0.6.3'
         $m1.Selection.MinLevel | Should -Be 'high'
         $m1.Selection.ExactLevel | Should -BeNullOrEmpty
         $m1.SettingSource.MinLevel | Should -Be 'Default'

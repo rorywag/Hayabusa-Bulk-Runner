@@ -64,42 +64,88 @@
     Optional engagement config file (.psd1). Loaded as data only with
     Import-PowerShellDataFile. See config\engagement.example.psd1.
 
+.PARAMETER Help
+    Print a short usage summary and stop. -h does the same. Nothing is
+    read or written.
+
 .EXAMPLE
     .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 
 .EXAMPLE
     .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
+
+.EXAMPLE
+    .\Invoke-BulkHayabusa.ps1 -Help
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Run')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
     [string]$InputRoot,
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Run')]
     [ValidateNotNullOrEmpty()]
     [string]$OutputRoot,
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Run')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$HayabusaPath,
 
+    [Parameter(ParameterSetName = 'Run')]
     [ValidateSet('informational', 'low', 'medium', 'high', 'critical', 'emergency')]
     [string]$MinLevel = 'high',
 
+    [Parameter(ParameterSetName = 'Run')]
     [ValidateRange(1, 256)]
     [int]$Threads,
 
+    [Parameter(ParameterSetName = 'Run')]
     [switch]$Force,
 
+    [Parameter(ParameterSetName = 'Run')]
     [switch]$KeepArtifacts,
 
+    [Parameter(ParameterSetName = 'Run')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-    [string]$ConfigPath
+    [string]$ConfigPath,
+
+    # In a set of its own, so -Help binds without asking for the required
+    # parameters.
+    [Parameter(ParameterSetName = 'Help')]
+    [Alias('h')]
+    [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    @(
+        'Invoke-BulkHayabusa.ps1: runs Hayabusa across a folder of per-host KAPE collections and builds a cross-host triage view.'
+        ''
+        'Usage:'
+        '  .\Invoke-BulkHayabusa.ps1 -InputRoot <folder> -OutputRoot <folder> -HayabusaPath <hayabusa.exe> [options]'
+        ''
+        'Required:'
+        '  -InputRoot      Parent folder holding one entry per host'
+        '  -OutputRoot     Where everything is written. Created if missing. Must not be inside InputRoot'
+        '  -HayabusaPath   Full path to hayabusa.exe'
+        ''
+        'Options:'
+        '  -MinLevel       Severity floor: informational, low, medium, high, critical or emergency. Default high'
+        '  -Threads        Thread count passed to Hayabusa. Leave it out to let Hayabusa decide'
+        '  -Force          Rerun hosts that already finished'
+        '  -KeepArtifacts  Keep extracted ZIPs and differencing disks after each host, for debugging'
+        '  -ConfigPath     Engagement config .psd1 for ExactLevel, tag filters, a time window and more'
+        ''
+        'Examples:'
+        '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe'
+        '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium -ConfigPath D:\Cases\Case01\engagement.psd1'
+        ''
+        'For the complete help: Get-Help .\Invoke-BulkHayabusa.ps1 -Full'
+    )
+    return
+}
 
 # Progress and the end-of-run summary go to the information stream, which
 # PowerShell hides by default. Show it unless the caller chose otherwise.
@@ -107,7 +153,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
     $InformationPreference = 'Continue'
 }
 
-$ToolVersion = '0.6.2'
+$ToolVersion = '0.6.3'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
 foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')) {

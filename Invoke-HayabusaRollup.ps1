@@ -22,18 +22,48 @@
 .PARAMETER OutputRoot
     The OutputRoot of an earlier run, holding run_manifest.csv.
 
+.PARAMETER Help
+    Print a short usage summary and stop. -h does the same. Nothing is
+    read or written.
+
 .EXAMPLE
     .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output
+
+.EXAMPLE
+    .\Invoke-HayabusaRollup.ps1 -Help
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Run')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
-    [string]$OutputRoot
+    [string]$OutputRoot,
+
+    # In a set of its own, so -Help binds without asking for OutputRoot.
+    [Parameter(ParameterSetName = 'Help')]
+    [Alias('h')]
+    [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    @(
+        'Invoke-HayabusaRollup.ps1: rebuilds the triage CSVs and dashboard from an existing OutputRoot, without rerunning anything.'
+        ''
+        'Usage:'
+        '  .\Invoke-HayabusaRollup.ps1 -OutputRoot <folder>'
+        ''
+        'Required:'
+        '  -OutputRoot  The OutputRoot of an earlier run, holding run_manifest.csv'
+        ''
+        'Example:'
+        '  .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output'
+        ''
+        'For the complete help: Get-Help .\Invoke-HayabusaRollup.ps1 -Full'
+    )
+    return
+}
 
 # Show the closing pointer unless the caller chose otherwise.
 if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
