@@ -107,6 +107,7 @@ A rerun skips hosts that already finished, whatever the settings. On a case that
 | `-Force` | Rerun hosts that already finished |
 | `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
 | `-ConfigPath` | Engagement config file, see below |
+| `-Help` | Print a usage summary and exit. `-h` is the same |
 
 ### Lay out each case the same way
 
