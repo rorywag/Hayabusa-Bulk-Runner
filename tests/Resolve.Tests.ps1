@@ -108,3 +108,22 @@ Describe 'Removal guards' {
         Test-Path -LiteralPath (Join-TestPath $busy 'f') | Should -BeTrue
     }
 }
+
+Describe 'Interrupted while preparing a host' {
+    It 'still removes what it set up when the run is stopped part way' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'interrupted')
+        $extract = Join-TestPath $o '_work' 'PLAIN'
+        # A labelled break unwinds like Ctrl+C: catch blocks are skipped and
+        # only finally blocks run.
+        Mock Expand-ZipArchiveSafe {
+            New-TestDirectory -Path $Destination | Out-Null
+            Write-TestText -Path (Join-Path -Path $Destination -ChildPath 'partial.evtx') -Line @('x') | Out-Null
+            break interrupted
+        }
+        :interrupted foreach ($i in 1) {
+            Resolve-CollectionInput -Collection $cols.PLAIN -OutputRoot $o -MaxUncompressedBytes $cap -MaxRatio 250 | Out-Null
+        }
+        Should -Invoke Expand-ZipArchiveSafe -Times 1 -Exactly
+        Test-Path -LiteralPath $extract | Should -BeFalse
+    }
+}

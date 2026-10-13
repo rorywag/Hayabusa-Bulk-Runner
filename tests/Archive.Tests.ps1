@@ -242,6 +242,28 @@ Describe 'Long paths' {
         Test-Path -LiteralPath $dest | Should -BeFalse
     }
 
+    It 'reports an unrelated error on a deep ZIP as itself, not as a long path' {
+        $zp = Join-TestPath $lp 'dupe.zip'
+        $fs = [System.IO.File]::Open($zp, [System.IO.FileMode]::CreateNew)
+        $za = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+        foreach ($i in 1..2) {
+            $w = New-Object System.IO.StreamWriter($za.CreateEntry($deepEntry).Open())
+            $w.Write('synthetic')
+            $w.Dispose()
+        }
+        $za.Dispose()
+        $fs.Dispose()
+        $dest = Join-TestPath $lp 'dupe-out'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        if ($mayRefuseLongPaths -and $m -like "dupe.zip can't be extracted here*") {
+            Set-ItResult -Skipped -Because 'this runtime refuses the deep path before the duplicate entry is reached'
+            return
+        }
+        $m | Should -BeLike '*already exists*'
+        $m | Should -Not -BeLike "*can't be extracted here*"
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+
     Context 'When the path cannot even be resolved, as on Windows PowerShell 5.1' {
         BeforeAll {
             $script:longName = 'C/' + ('r' * 300) + '.evtx'
@@ -294,5 +316,28 @@ Describe 'Long paths' {
         ConvertFrom-ExtendedLengthPath -Path ('\\?\' + $long) | Should -BeExactly $long
         ConvertFrom-ExtendedLengthPath -Path '\\?\UNC\server\share\x' | Should -BeExactly '\\server\share\x'
         ConvertFrom-ExtendedLengthPath -Path $short | Should -BeExactly $short
+    }
+}
+
+Describe 'Entry names Windows cannot use in a path' {
+    BeforeAll { $script:bn = New-TestDirectory (Join-TestPath $TestDrive 'badname') }
+
+    It 'marks the ZIP unreadable, with guidance naming it, for <Label>' -ForEach @(
+        @{ Label = 'a pipe'; Entry = 'C/Windows/a|b.evtx' }
+        @{ Label = 'a control character'; Entry = ('C/Windows/a' + [char]1 + 'b.evtx') }
+        @{ Label = 'a double quote'; Entry = 'C/Windows/a"b.evtx' }
+    ) {
+        $zp = New-TestZip -Path (Join-TestPath $bn ('{0}.zip' -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ $Entry = 'synthetic'; 'C/Windows/System32/winevt/Logs/Security.evtx' = 'synthetic' })
+        $info = Get-ZipEntryInfo -Path $zp
+        $info.Readable | Should -BeFalse
+        $info.ReadReason | Should -Be 'BadName'
+        Get-ZipGuidance -Source 'BAD.zip' -Info $info | Should -BeExactly "BAD.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+    }
+    It 'checks a disk image name without throwing, whatever characters it holds' {
+        { Test-DiskImageName -Name ('x' + [char]1 + '|"<>.vhdx') } | Should -Not -Throw
+        Test-DiskImageName -Name 'C/a|b.VHDX' | Should -BeTrue
+        Test-DiskImageName -Name 'C/a|b.evtx' | Should -BeFalse
+        Test-DiskImageName -Name 'C/noext' | Should -BeFalse
+        Test-DiskImageName -Name 'dir.vhdx/file' | Should -BeFalse
     }
 }
