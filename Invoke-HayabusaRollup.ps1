@@ -23,7 +23,7 @@
     The OutputRoot of an earlier run, holding run_manifest.csv.
 
 .EXAMPLE
-    .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Hayabusa
+    .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output
 #>
 [CmdletBinding()]
 param(
