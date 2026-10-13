@@ -197,7 +197,7 @@ function New-DashboardHtml {
     .DESCRIPTION
         Order: summary leading with the top emergency, critical and high
         rules, the full rule table, the host table with links to each
-        host's report, timeline and log, then provenance. Every value is
+        host's report, timeline and log, then run details. Every value is
         HTML-encoded. Links are relative paths under OutputRoot and only
         appear when the file exists. Severity tiles with a count of zero are
         dimmed so the levels that fired stand out. Each distinct note on a
@@ -286,7 +286,7 @@ function New-DashboardHtml {
     [void]$sb.AppendLine('</div>')
 
     if ($Data.MixedFloors) {
-        [void]$sb.AppendLine("<div class=`"warnbox`">Rows come from runs with different severity floors ($(& $e ($Data.Floors -join ', '))). A host with no detections is only clean at the floor its run used. See Provenance.</div>")
+        [void]$sb.AppendLine("<div class=`"warnbox`">Rows come from runs with different severity floors ($(& $e ($Data.Floors -join ', '))). A host with no detections is only clean at the floor its run used. See Run details.</div>")
     }
 
     # Rules
@@ -385,7 +385,7 @@ function New-DashboardHtml {
     }
 
     # Provenance
-    [void]$sb.AppendLine('<h2 id="provenance">Provenance</h2>')
+    [void]$sb.AppendLine('<h2 id="provenance">Run details</h2>')
     $prov = @($Data.Provenance)
     if ($prov.Count -eq 0) {
         [void]$sb.AppendLine('<p class="dim">No runs referenced by the manifest.</p>')
