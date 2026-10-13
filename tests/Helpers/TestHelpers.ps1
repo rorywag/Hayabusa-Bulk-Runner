@@ -82,6 +82,27 @@ function New-TestZip {
     return $Path
 }
 
+function Edit-ZipEntryName {
+    # Rewrites an entry name in place, in the local header and the central
+    # directory. .NET Framework refuses some names when creating an entry,
+    # so a test ZIP is built with a placeholder of the same length first.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$From, [Parameter(Mandatory)][string]$To)
+    if ($From.Length -ne $To.Length) { throw 'The names must be the same length.' }
+    $b = [System.IO.File]::ReadAllBytes($Path)
+    $f = [System.Text.Encoding]::ASCII.GetBytes($From)
+    $t = [System.Text.Encoding]::ASCII.GetBytes($To)
+    $hits = 0
+    for ($i = 0; $i -le $b.Length - $f.Length; $i++) {
+        $match = $true
+        for ($j = 0; $j -lt $f.Length; $j++) {
+            if ($b[$i + $j] -ne $f[$j]) { $match = $false; break }
+        }
+        if ($match) { [System.Array]::Copy($t, 0, $b, $i, $t.Length); $hits++ }
+    }
+    if ($hits -lt 2) { throw "Entry name $From found $hits time(s), expected it in both headers." }
+    [System.IO.File]::WriteAllBytes($Path, $b)
+}
+
 function Find-ZipSignature {
     param([byte[]]$Bytes, [uint32]$Signature, [int]$Start = 0)
     for ($i = $Start; $i -le $Bytes.Length - 4; $i++) {

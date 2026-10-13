@@ -327,7 +327,9 @@ Describe 'Entry names Windows cannot use in a path' {
         @{ Label = 'a control character'; Entry = ('C/Windows/a' + [char]1 + 'b.evtx') }
         @{ Label = 'a double quote'; Entry = 'C/Windows/a"b.evtx' }
     ) {
-        $zp = New-TestZip -Path (Join-TestPath $bn ('{0}.zip' -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ $Entry = 'synthetic'; 'C/Windows/System32/winevt/Logs/Security.evtx' = 'synthetic' })
+        $placeholder = $Entry -replace '[\x00-\x1F"<>|]', '_'
+        $zp = New-TestZip -Path (Join-TestPath $bn ('{0}.zip' -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ $placeholder = 'synthetic'; 'C/Windows/System32/winevt/Logs/Security.evtx' = 'synthetic' })
+        Edit-ZipEntryName -Path $zp -From $placeholder -To $Entry
         $info = Get-ZipEntryInfo -Path $zp
         $info.Readable | Should -BeFalse
         $info.ReadReason | Should -Be 'BadName'

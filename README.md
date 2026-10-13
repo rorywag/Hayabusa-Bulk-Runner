@@ -153,6 +153,8 @@ Deep paths are fine. KAPE output can run past Windows' 260-character path limit,
 
 Mounting a disk image needs an elevated session. If any collection is a disk image, or a ZIP holding one, and the session isn't elevated, the run stops at the start before anything is written and says which collections need it. Rerun from an Administrator PowerShell prompt. A run with only folders and plain ZIPs doesn't need elevation.
 
+The differencing disk is created with diskpart, which can't reliably read non-ASCII characters in a path. A disk image whose path, or whose OutputRoot, holds any is refused with a message saying so, before diskpart runs.
+
 ## Evidence integrity
 
 The evidence is only ever read.

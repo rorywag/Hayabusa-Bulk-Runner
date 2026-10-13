@@ -51,18 +51,13 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
         }
     }
 
-    It 'mounts with OutputRoot on a path holding a non-ASCII character' {
+    It 'refuses an OutputRoot holding a non-ASCII character clearly, leaving nothing behind' {
         $out = New-TestDirectory (Join-TestPath $TestDrive ('F' + [char]0x00E4 + 'lle') 'out')
         $c = @(Get-InputCollection -InputRoot $in -WarningAction SilentlyContinue)
-        $r = Resolve-CollectionInput -Collection $c[0] -OutputRoot $out -MaxUncompressedBytes 1GB -MaxRatio 250
-        try {
-            Test-Path -LiteralPath $r.ChildPath | Should -BeTrue
-            Test-Path -LiteralPath (Join-Path -Path $r.Path -ChildPath 'Windows\System32\winevt\Logs') | Should -BeTrue
-        }
-        finally {
-            Invoke-CollectionCleanup -Resolved $r
-        }
-        Test-Path -LiteralPath $r.ChildPath | Should -BeFalse
+        $m = Get-ThrownMessage { Resolve-CollectionInput -Collection $c[0] -OutputRoot $out -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "*can't be passed to diskpart, which can't reliably read non-ASCII characters*"
+        @(Get-ChildItem -LiteralPath (Join-TestPath $out '_diff') -Force -ErrorAction SilentlyContinue).Count | Should -Be 0
+        (Get-DiskImage -ImagePath $parent).Attached | Should -BeFalse
         (Get-FileHash -LiteralPath $parent -Algorithm SHA256).Hash | Should -Be $parentHash
     }
 

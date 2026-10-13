@@ -170,7 +170,8 @@ Describe 'A ZIP entry name Windows cannot use in a path' {
     It 'fails only that ZIP, with guidance naming it, and discovery carries on' {
         $root = New-TestDirectory (Join-TestPath $TestDrive 'oddname')
         New-TestDirectory (Join-TestPath $root 'GOOD' 'C' 'Windows' 'System32' 'winevt' 'Logs') | Out-Null
-        New-TestZip -Path (Join-TestPath $root 'ODD.zip') -Entries ([ordered]@{ 'C/Windows/a|b.evtx' = 'synthetic' }) | Out-Null
+        $zp = New-TestZip -Path (Join-TestPath $root 'ODD.zip') -Entries ([ordered]@{ 'C/Windows/a_b.evtx' = 'synthetic' })
+        Edit-ZipEntryName -Path $zp -From 'C/Windows/a_b.evtx' -To 'C/Windows/a|b.evtx'
         $c = @(Get-InputCollection -InputRoot $root -WarningAction SilentlyContinue)
         $c.Count | Should -Be 2
         $odd = @($c | Where-Object { $_.Collection -eq 'ODD' })[0]
