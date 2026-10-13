@@ -36,7 +36,7 @@ Keep the `lib` folder beside the two scripts, since they load everything from it
 ## Quick start
 
 ```powershell
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 ```
 
 It prints one line per host as it goes, then a short summary and where to look:
@@ -44,10 +44,10 @@ It prints one line per host as it goes, then a short summary and where to look:
 ```
 [1/4] DC01 ... Completed, 12 detections
 [2/4] FS02 ... Completed, 6 detections
-WARNING: [3/4] WS03 ... Failed: Hayabusa exited with code 2. See D:\Cases\Case01\Hayabusa\WS03\WS03_hayabusa.log. No CSV was written.
+WARNING: [3/4] WS03 ... Failed: Hayabusa exited with code 2. See D:\Cases\Case01\Output\WS03\WS03_hayabusa.log. No CSV was written.
 [4/4] WS04 ... skipped, already Completed
 Done: 3 processed, 2 completed, 0 completed with errors, 1 failed, 1 skipped.
-Output is in D:\Cases\Case01\Hayabusa. Open triage_dashboard.html there to start triage.
+Output is in D:\Cases\Case01\Output. Open triage_dashboard.html there to start triage.
 ```
 
 Add `-Verbose` for more detail. `-InformationAction SilentlyContinue` hides the progress lines and leaves only warnings.
@@ -61,7 +61,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 With an engagement config and a lower severity floor:
 
 ```powershell
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa `
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output `
     -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
 ```
 
@@ -73,22 +73,22 @@ Each of these is a complete command. Copy one and change the paths:
 
 ```powershell
 # Default triage run, floor at high. Start here on a new case.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 
 # Broader sweep, medium and up, when high is too narrow.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium
 
 # Cap Hayabusa at two threads, on a box that's busy with other work.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Threads 2
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Threads 2
 
 # Rerun every host, finished ones included, after fixing something such as the rules.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Force
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -Force
 
 # Keep extracted ZIPs and differencing disks, to debug a host that failed.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -KeepArtifacts
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -KeepArtifacts
 
 # Engagement settings from a config: ExactLevel, tag filters, a time window and the output profile live there.
-.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Hayabusa -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1
 ```
 
 `-MinLevel` takes any of the six levels, informational, low, medium, high (the default), critical or emergency, and means that level and up.
@@ -115,7 +115,7 @@ Give each case one folder, and keep its OutputRoot in the same place for the lif
 ```
 D:\Cases\Case01\
   KAPE\              InputRoot: one entry per host
-  Hayabusa\          OutputRoot: every run for this case goes here
+  Output\            OutputRoot: every run for this case goes here
   engagement.psd1    the case's config, if it has one
 ```
 
@@ -175,7 +175,7 @@ The fix is to extract the ZIP with 7-Zip or similar, put the extracted folder in
 
 If the check can't make sense of a ZIP at all, or an entry name holds a character no Windows path can use, such as `|` or a control character, it's treated the same way: listed, failed, never half-extracted. A ZIP that can't be read never counts as readable.
 
-ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits. The defaults are 100 GB and 250:1, and both can be changed in the engagement config. Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
+ZIPs that can be extracted are still treated as hostile. Before anything is written, every entry name is checked for path traversal and names Windows can't hold, and the declared size and compression ratio are checked against limits. The defaults are 100 GB of uncompressed content and a 250:1 ratio of extracted size to ZIP size. Both are set in the engagement config, as `ZipMaxUncompressedGB` and `ZipMaxRatio`. Extraction counts the bytes actually written, and stops if an entry writes more than it claimed. It also checks there's room for the extract on the OutputRoot volume, and warns if it can't tell, as on some network shares.
 
 Deep paths are fine. KAPE output can run past Windows' 260-character path limit, for example the crash reports under `C\ProgramData\Microsoft\Windows\WER\ReportArchive`. The tool writes, lists and removes the extract through Windows' extended-length paths, so those extract like anything else. If a path still can't be created, that collection fails with a message saying so. For a long path the fix is a shorter OutputRoot, such as `D:\Out`, or extracting the ZIP yourself nearer the drive root. A single name over 255 characters can't be created anywhere on Windows, so extract that ZIP yourself with a tool that can shorten or skip the entry, then apply the same fix as above.
 
@@ -247,7 +247,7 @@ One host failing never stops the batch.
 To rebuild the triage files and dashboard from an existing OutputRoot without rerunning anything, on any machine:
 
 ```powershell
-.\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Hayabusa
+.\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output
 ```
 
 ## Engagement config
