@@ -128,7 +128,10 @@ Describe 'A run' {
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
         $m1.SchemaVersion | Should -Be 6
-        $m1.Tool.Version | Should -Be '0.6.3'
+        # Compared with $ToolVersion as the script sets it, so a release needs no test change.
+        $toolVersion = [regex]::Match([System.IO.File]::ReadAllText($MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
+        $toolVersion | Should -Match '^\d+\.\d+\.\d+$'
+        $m1.Tool.Version | Should -Be $toolVersion
         $m1.Selection.MinLevel | Should -Be 'medium'
         $m1.Selection.ExactLevel | Should -BeNullOrEmpty
         $m1.SettingSource.MinLevel | Should -Be 'Default'
