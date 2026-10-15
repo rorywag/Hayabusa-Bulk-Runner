@@ -217,17 +217,18 @@ Describe 'Version check and the startup notice' {
         Get-HayabusaVersionNumber -VersionLine $null | Should -BeNullOrEmpty
     }
     It 'gives no notice for the tested version or an unreadable one' {
-        Get-HayabusaVersionNotice -VersionLine "Hayabusa v$TestedHayabusaVersion - Suzumushi Release" | Should -BeNullOrEmpty
+        Get-HayabusaVersionNotice -VersionLine $FakeVersionLine | Should -BeNullOrEmpty
         Get-HayabusaVersionNotice -VersionLine $null | Should -BeNullOrEmpty
     }
     It 'names both versions and the self-test when they differ' {
-        Get-HayabusaVersionNotice -VersionLine 'Hayabusa v4.2.0 - Next Release' | Should -BeExactly "Hayabusa 4.2.0 is not the version this tool was tested with ($TestedHayabusaVersion). Run Test-HayabusaCompatibility.ps1 against it to check the flags, output columns and severity levels this tool relies on."
+        $OtherHayabusaVersion | Should -Not -Be $TestedHayabusaVersion
+        Get-HayabusaVersionNotice -VersionLine "Hayabusa v$OtherHayabusaVersion - Next Release" | Should -BeExactly "Hayabusa $OtherHayabusaVersion is not the version this tool was tested with ($TestedHayabusaVersion). Run Test-HayabusaCompatibility.ps1 against it to check the flags, output columns and severity levels this tool relies on."
     }
     It 'passes the version check with a note, and fails it when nothing was read' {
         (Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = $FakeVersionLine; Error = $null })).Detail | Should -Be "$FakeVersionLine (the tested version)"
-        $other = Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = 'Hayabusa v4.2.0'; Error = $null })
+        $other = Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = "Hayabusa v$OtherHayabusaVersion"; Error = $null })
         $other.Passed | Should -BeTrue
-        $other.Detail | Should -Be "Hayabusa v4.2.0 (tested version is $TestedHayabusaVersion)"
+        $other.Detail | Should -Be "Hayabusa v$OtherHayabusaVersion (tested version is $TestedHayabusaVersion)"
         $none = Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = $null; Error = 'No line matching' })
         $none.Passed | Should -BeFalse
         $none.Detail | Should -Be 'could not read the version: No line matching'

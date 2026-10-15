@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Tested against Hayabusa 4.2.0. The startup notice no longer fires on 4.2.0.
+
 - The dashboard summary tiles show a plain count per severity, and now include an informational tile. The host subtext on the emergency, critical and high tiles is removed, so all six read the same way.
 - Host names in the dashboard's host table, and the collections in the rules table's "Seen on" column, are shown as grey chips that wrap within the cell, so a long name no longer widens the table.
 - The dashboard's host table heads its first column Hostname instead of Host. `triage_hosts.csv` keeps its Host column.
