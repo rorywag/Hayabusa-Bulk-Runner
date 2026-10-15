@@ -1,6 +1,8 @@
-# Stand-in for hayabusa.exe 4.1.0, used by the tests. It runs as its own
-# process through a small launcher (hayabusa.cmd on Windows, a shell script
-# elsewhere) so the tool calls it exactly as it calls the real binary.
+# Stand-in for hayabusa.exe, used by the tests. It behaves as Hayabusa 4.1.0
+# does, and its help banner reports the version in FAKE_HAYABUSA_VERSION,
+# which TestHelpers.ps1 sets from $script:TestedHayabusaVersion. It runs as
+# its own process through a small launcher (hayabusa.cmd on Windows, a shell
+# script elsewhere) so the tool calls it exactly as it calls the real binary.
 #
 # help        prints a logo and the version banner. FAKE_NO_BANNER drops the
 #             banner, FAKE_HELP_MODE=silent prints no version line at all,
@@ -22,12 +24,17 @@ if ($argv.Count -gt 0 -and $argv[0] -eq '--version') {
 }
 
 if ($argv.Count -gt 0 -and $argv[0] -eq 'help') {
+    if ([string]::IsNullOrEmpty($env:FAKE_HAYABUSA_VERSION)) {
+        [Console]::Error.WriteLine('FAKE_HAYABUSA_VERSION is not set. Dot-source tests/Helpers/TestHelpers.ps1 first.')
+        exit 3
+    }
+    $banner = "Hayabusa v$($env:FAKE_HAYABUSA_VERSION) - Suzumushi Release"
     if ($env:FAKE_HELP_MODE -eq 'silent') {
         [Console]::Out.WriteLine('usage only')
         exit 0
     }
     if ($env:FAKE_HELP_MODE -eq 'indented') {
-        [Console]::Out.WriteLine('   Hayabusa v4.1.0 - Suzumushi Release')
+        [Console]::Out.WriteLine("   $banner")
         exit 0
     }
     [Console]::Out.WriteLine('')
@@ -35,7 +42,7 @@ if ($argv.Count -gt 0 -and $argv[0] -eq 'help') {
     [Console]::Out.WriteLine(' | | | | __ _ _   _  __| |__  _   _ ___  __ _ ')
     [Console]::Out.WriteLine('')
     if ([string]::IsNullOrEmpty($env:FAKE_NO_BANNER)) {
-        [Console]::Out.WriteLine("$esc[1;32mHayabusa v4.1.0 - Suzumushi Release   $esc[0m")
+        [Console]::Out.WriteLine("$esc[1;32m$banner   $esc[0m")
     }
     [Console]::Out.WriteLine('Usage:')
     [Console]::Out.WriteLine('  hayabusa.exe <COMMAND> [OPTIONS]')

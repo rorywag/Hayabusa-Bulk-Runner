@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A scheduled Hayabusa compatibility watcher. Once a week, and on demand, a workflow checks for a new Hayabusa release, runs `Test-HayabusaCompatibility.ps1` against it when it isn't the tested version, and files a `hayabusa-compat` issue with the result. It never changes the repo.
+
 ### Changed
 
 - The dashboard summary tiles show a plain count per severity, and now include an informational tile. The host subtext on the emergency, critical and high tiles is removed, so all six read the same way.

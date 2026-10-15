@@ -271,7 +271,10 @@ $script:VersionLinePattern = '^\s*Hayabusa v\d+\.\d+'
 
 # The Hayabusa release this tool's flags, CSV handling and severity levels
 # were checked against. Test-HayabusaCompatibility.ps1 checks a new release;
-# when it passes, raise this and the README's tested-version line.
+# when it passes, raise this and the values between the tested-version
+# markers in README.md and docs/USAGE.md. This is the only place the tested
+# version is set: the tests and the fake Hayabusa take it from here, and a
+# test checks the docs markers match it.
 $script:TestedHayabusaVersion = '4.1.0'
 
 function Get-HayabusaVersion {

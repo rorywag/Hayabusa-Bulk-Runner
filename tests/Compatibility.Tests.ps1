@@ -212,7 +212,7 @@ Describe 'Level values' {
 
 Describe 'Version check and the startup notice' {
     It 'reads the version number from the banner' {
-        Get-HayabusaVersionNumber -VersionLine 'Hayabusa v4.1.0 - Suzumushi Release' | Should -Be '4.1.0'
+        Get-HayabusaVersionNumber -VersionLine $FakeVersionLine | Should -Be $TestedHayabusaVersion
         Get-HayabusaVersionNumber -VersionLine 'Hayabusa v4.2.10-dev' | Should -Be '4.2.10'
         Get-HayabusaVersionNumber -VersionLine $null | Should -BeNullOrEmpty
     }
@@ -224,7 +224,7 @@ Describe 'Version check and the startup notice' {
         Get-HayabusaVersionNotice -VersionLine 'Hayabusa v4.2.0 - Next Release' | Should -BeExactly "Hayabusa 4.2.0 is not the version this tool was tested with ($TestedHayabusaVersion). Run Test-HayabusaCompatibility.ps1 against it to check the flags, output columns and severity levels this tool relies on."
     }
     It 'passes the version check with a note, and fails it when nothing was read' {
-        (Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = 'Hayabusa v4.1.0 - Suzumushi Release'; Error = $null })).Detail | Should -Be 'Hayabusa v4.1.0 - Suzumushi Release (the tested version)'
+        (Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = $FakeVersionLine; Error = $null })).Detail | Should -Be "$FakeVersionLine (the tested version)"
         $other = Test-CompatibilityVersion -HayabusaVersion ([pscustomobject]@{ Version = 'Hayabusa v4.2.0'; Error = $null })
         $other.Passed | Should -BeTrue
         $other.Detail | Should -Be "Hayabusa v4.2.0 (tested version is $TestedHayabusaVersion)"
@@ -263,7 +263,7 @@ Describe 'The whole check with the fake Hayabusa' {
         @($r.Checks | Where-Object { -not $_.Passed } | ForEach-Object { "$($_.Name): $($_.Detail)" }) | Should -BeNullOrEmpty
         $r.ExitCode | Should -Be 0
         @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exclude-tag', 'columns exclude-tag', 'levels')
-        $r.Version.Version | Should -Be 'Hayabusa v4.1.0 - Suzumushi Release'
+        $r.Version.Version | Should -Be $FakeVersionLine
         Test-Path -LiteralPath (Join-TestPath $r.Work 'sample' 'Security.evtx') | Should -BeTrue
     }
     It 'gives Hayabusa exactly the arguments New-HayabusaArgument builds, and logs each run' {
@@ -339,7 +339,7 @@ Describe 'Entry script on Windows with the fake Hayabusa' -Skip:(-not $onWindows
         $r = Invoke-ScriptInNewProcess -Path $CompatibilityScript -Argument @('-HayabusaPath', $hb, '-RulesPath', $rules) -WorkingDirectory $TestDrive
         $r.ExitCode | Should -Be 1
         $r.Output | Should -Contain 'Hayabusa compatibility check'
-        @($r.Output | Where-Object { $_ -like 'PASS  version *Hayabusa v4.1.0 - Suzumushi Release (the tested version)' }).Count | Should -Be 1
+        @($r.Output | Where-Object { $_ -like "PASS  version *$FakeVersionLine (the tested version)" }).Count | Should -Be 1
         @($r.Output | Where-Object { $_ -like 'FAIL  run baseline *exit code 0 but no CSV was written*' }).Count | Should -Be 1
         $r.Output[-2] | Should -BeLike 'Result: FAIL, * checks failed.'
         $r.Output[-1] | Should -BeExactly 'Working folder removed. Rerun with -KeepArtifacts to keep each run''s CSV, report and log.'

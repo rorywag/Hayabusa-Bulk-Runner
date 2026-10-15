@@ -321,7 +321,7 @@ Describe 'End to end on Windows with the fake Hayabusa' -Skip:(-not $onWindows) 
         $em.Summary.Completed | Should -Be 2
     }
     It 'reads the version from the help banner' {
-        $em.Hayabusa.Version | Should -BeExactly 'Hayabusa v4.1.0 - Suzumushi Release'
+        $em.Hayabusa.Version | Should -BeExactly $FakeVersionLine
         $em.Hayabusa.VersionError | Should -BeNullOrEmpty
     }
     It 'writes per-host files and a dashboard that links to them' {
