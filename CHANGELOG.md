@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-15
+
 ### Added
 
 - A scheduled Hayabusa compatibility watcher. Once a week, and on demand, a workflow checks for a new Hayabusa release, runs `Test-HayabusaCompatibility.ps1` against it when it isn't the tested version, and files a `hayabusa-compat` issue with the result. It never changes the repo.
@@ -13,7 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Tested against Hayabusa 4.2.0. The startup notice no longer fires on 4.2.0.
-
 - The dashboard summary tiles show a plain count per severity, and now include an informational tile. The host subtext on the emergency, critical and high tiles is removed, so all six read the same way.
 - Host names in the dashboard's host table, and the collections in the rules table's "Seen on" column, are shown as grey chips that wrap within the cell, so a long name no longer widens the table.
 - The dashboard's host table heads its first column Hostname instead of Host. `triage_hosts.csv` keeps its Host column.
@@ -63,7 +64,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.1...v0.6.2
