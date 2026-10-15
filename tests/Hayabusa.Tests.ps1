@@ -62,7 +62,7 @@ Describe 'Version from the help banner' {
 
     It 'stores the banner line verbatim and skips the logo' {
         $v = Get-HayabusaVersion -HayabusaPath $hb
-        $v.Version | Should -BeExactly 'Hayabusa v4.1.0 - Suzumushi Release'
+        $v.Version | Should -BeExactly $FakeVersionLine
         $v.ExitCode | Should -Be 0
         $v.Error | Should -BeNullOrEmpty
         $v.PSObject.Properties.Name | Should -Not -Contain 'Output'
@@ -76,7 +76,7 @@ Describe 'Version from the help banner' {
     It 'matches an indented banner' {
         $env:FAKE_HELP_MODE = 'indented'
         try { $v = Get-HayabusaVersion -HayabusaPath $hb } finally { Remove-Item Env:\FAKE_HELP_MODE }
-        $v.Version | Should -BeExactly 'Hayabusa v4.1.0 - Suzumushi Release'
+        $v.Version | Should -BeExactly $FakeVersionLine
     }
     It 'returns null when nothing matches' {
         $env:FAKE_HELP_MODE = 'silent'
@@ -86,7 +86,7 @@ Describe 'Version from the help banner' {
     It 'keeps the version and records a non-zero exit' {
         $env:FAKE_VERSION_FAIL = '1'
         try { $v = Get-HayabusaVersion -HayabusaPath $hb } finally { Remove-Item Env:\FAKE_VERSION_FAIL }
-        $v.Version | Should -BeExactly 'Hayabusa v4.1.0 - Suzumushi Release'
+        $v.Version | Should -BeExactly $FakeVersionLine
         $v.ExitCode | Should -Be 1
         $v.Error | Should -BeLike '*exited with code 1. Version line was still read.'
     }
@@ -143,5 +143,21 @@ Describe 'Native capture' {
         $ErrorActionPreference = 'Stop'
         $in = New-FakeHost -InputRoot (Join-TestPath $TestDrive 'nc2') -Name 'H' -Behavior "EXIT=0`nSTDERR=warning line"
         { Invoke-NativeCapture -FilePath $hb -Argument @('dfir-timeline', '-d', $in) -OnLine { param($l) $null = $l } } | Should -Not -Throw
+    }
+}
+
+Describe 'Tested version in the docs' {
+    It 'matches the tested version between every tested-version marker in <File>' -ForEach @(
+        @{ File = 'README.md' }
+        @{ File = 'docs/USAGE.md' }
+    ) {
+        $text = [System.IO.File]::ReadAllText((Join-Path -Path $script:RepoRoot -ChildPath $File))
+        $values = @([regex]::Matches($text, '<!--tested-version-->(.*?)<!--/tested-version-->') | ForEach-Object { $_.Groups[1].Value })
+        $values.Count | Should -BeGreaterThan 0
+        ([regex]::Matches($text, '<!--tested-version-->')).Count | Should -Be $values.Count -Because 'every marker is closed'
+        ([regex]::Matches($text, '<!--/tested-version-->')).Count | Should -Be $values.Count -Because 'every marker is opened'
+        foreach ($v in $values) {
+            $v | Should -BeExactly $TestedHayabusaVersion
+        }
     }
 }

@@ -1,0 +1,251 @@
+name: Hayabusa compatibility
+
+# Watches for new Hayabusa releases. When the latest release isn't the
+# tested version in lib/Hayabusa.ps1, it runs Test-HayabusaCompatibility.ps1
+# against that release and files an issue with the result. It never writes
+# to the repo: adopting a new release is a normal pull request. This is a
+# watcher, not a pull request check.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 4 * * 4'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: hayabusa-compat
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check latest Hayabusa
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: Yamato-Security/hayabusa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A failed API call fails the job, so the failed run is the signal.
+      - name: Compare the latest release with the tested version
+        id: version
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = gh release view --repo $env:UPSTREAM --json 'tagName,assets'
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($json -join ''))) {
+              throw "Could not read the latest $env:UPSTREAM release (gh exit code $LASTEXITCODE)."
+          }
+          $release = ($json -join "`n") | ConvertFrom-Json
+          $tag = [string]$release.tagName
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+              throw 'The latest release has no tag name.'
+          }
+          $latest = $tag.Trim() -replace '^v', ''
+
+          $match = Select-String -LiteralPath lib/Hayabusa.ps1 -Pattern "^\`$script:TestedHayabusaVersion = '([^']+)'" | Select-Object -First 1
+          if ($null -eq $match) {
+              throw 'Could not find $script:TestedHayabusaVersion in lib/Hayabusa.ps1.'
+          }
+          $tested = $match.Matches[0].Groups[1].Value
+          "Latest Hayabusa release: $tag. Tested version: $tested."
+
+          if ($latest -eq $tested) {
+              "Hayabusa $latest is the tested version. Up to date, nothing to file."
+              "current=true" >> $env:GITHUB_OUTPUT
+              exit 0
+          }
+
+          # The Windows x64 package bundles the binary and its rules. The
+          # live-response package is a trimmed build, so it's skipped.
+          $assets = @($release.assets | Where-Object { $_.name -like '*win-x64*.zip' -and $_.name -notlike '*live-response*' } | Sort-Object -Property { $_.name.Length })
+          if ($assets.Count -eq 0) {
+              throw "Release $tag has no *win-x64*.zip asset. Assets: $(@($release.assets.name) -join ', ')"
+          }
+          $asset = $assets[0].name
+          "Using asset $asset."
+
+          "current=false" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$latest" >> $env:GITHUB_OUTPUT
+          "tested=$tested" >> $env:GITHUB_OUTPUT
+          "asset=$asset" >> $env:GITHUB_OUTPUT
+
+      # A failed download or a package without a binary fails the job.
+      - name: Download and unpack the release
+        id: unpack
+        if: steps.version.outputs.current == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $download = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'hayabusa-download'
+          $extract = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'hayabusa'
+          New-Item -ItemType Directory -Path $download, $extract -Force | Out-Null
+
+          gh release download $env:TAG --repo $env:UPSTREAM --pattern $env:ASSET --dir $download --clobber
+          if ($LASTEXITCODE -ne 0) {
+              throw "Downloading $env:ASSET from $env:UPSTREAM $env:TAG failed (gh exit code $LASTEXITCODE)."
+          }
+          $zip = Join-Path -Path $download -ChildPath $env:ASSET
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+              throw "$env:ASSET was not downloaded."
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+
+          $exes = @(Get-ChildItem -LiteralPath $extract -Recurse -File -Filter 'hayabusa*.exe')
+          if ($exes.Count -ne 1) {
+              throw "Expected one hayabusa*.exe in $env:ASSET, found $($exes.Count): $(@($exes.Name) -join ', ')"
+          }
+          $exe = $exes[0].FullName
+          "Binary: $exe"
+
+          $rules = Join-Path -Path $exes[0].DirectoryName -ChildPath 'rules'
+          if (-not (Test-Path -LiteralPath $rules -PathType Container)) {
+              "No rules folder in the package. Running update-rules."
+              Push-Location -LiteralPath $exes[0].DirectoryName
+              try {
+                  & $exe update-rules
+                  $code = $LASTEXITCODE
+              }
+              finally {
+                  Pop-Location
+              }
+              if ($code -ne 0 -or -not (Test-Path -LiteralPath $rules -PathType Container)) {
+                  throw "hayabusa update-rules failed (exit code $code), so there are no rules to test with."
+              }
+          }
+          "Rules: $rules"
+
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "rules=$rules" >> $env:GITHUB_OUTPUT
+
+      # A failing self-test is a result to report, not a broken run, so this
+      # step records the exit code and always succeeds.
+      - name: Run the compatibility self-test
+        id: selftest
+        if: steps.version.outputs.current == 'false'
+        env:
+          HAYABUSA_EXE: ${{ steps.unpack.outputs.exe }}
+          HAYABUSA_RULES: ${{ steps.unpack.outputs.rules }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'selftest.txt'
+          $lines = & {
+              $ErrorActionPreference = 'Continue'
+              & pwsh -NoProfile -NonInteractive -File ./Test-HayabusaCompatibility.ps1 -HayabusaPath $env:HAYABUSA_EXE -RulesPath $env:HAYABUSA_RULES 2>&1 | ForEach-Object { [string]$_ }
+          }
+          $code = $LASTEXITCODE
+          $text = (@($lines) -join "`n") -replace "\x1b\[[0-9;]*[A-Za-z]", ''
+          [System.IO.File]::WriteAllText($log, $text)
+          $text
+          "Self-test exit code: $code"
+          "exit=$code" >> $env:GITHUB_OUTPUT
+          "log=$log" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: File the result as an issue
+        if: steps.version.outputs.current == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TESTED: ${{ steps.version.outputs.tested }}
+          ASSET: ${{ steps.version.outputs.asset }}
+          SELFTEST_EXIT: ${{ steps.selftest.outputs.exit }}
+          SELFTEST_LOG: ${{ steps.selftest.outputs.log }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $label = 'hayabusa-compat'
+          $passed = ($env:SELFTEST_EXIT -eq '0')
+          if ($passed) {
+              $title = "Hayabusa $env:VERSION passes compatibility check"
+          }
+          else {
+              $title = "Hayabusa $env:VERSION FAILS compatibility check"
+          }
+
+          # An issue body holds at most 65536 characters. Long output keeps
+          # its end, where the summary is.
+          $output = [System.IO.File]::ReadAllText($env:SELFTEST_LOG)
+          $limit = 60000
+          if ($output.Length -gt $limit) {
+              $output = "[first $($output.Length - $limit) characters cut, the full output is in the run log]`n" + $output.Substring($output.Length - $limit)
+          }
+          $fence = '````'
+
+          $body = New-Object System.Collections.Generic.List[string]
+          $body.Add(('Detected version: Hayabusa {0}, release `{1}`, package `{2}`. The tested version is {3}.' -f $env:VERSION, $env:TAG, $env:ASSET, $env:TESTED))
+          $body.Add('')
+          if ($passed) {
+              $body.Add('Test-HayabusaCompatibility.ps1 passed against this release.')
+              $body.Add('')
+              $body.Add('To adopt it, in a normal pull request:')
+              $body.Add('')
+              $body.Add(('- [ ] Set `$script:TestedHayabusaVersion` in `lib/Hayabusa.ps1` to `{0}`' -f $env:VERSION))
+              $body.Add(('- [ ] Set the value between the tested-version markers in `README.md` and `docs/USAGE.md` to `{0}`' -f $env:VERSION))
+              $body.Add('- [ ] Add a CHANGELOG entry')
+              $body.Add('')
+              $body.Add('<details><summary>Self-test output</summary>')
+              $body.Add('')
+              $body.Add($fence)
+              $body.Add($output)
+              $body.Add($fence)
+              $body.Add('')
+              $body.Add('</details>')
+          }
+          else {
+              $body.Add(('Test-HayabusaCompatibility.ps1 failed against this release, exit code {0}. The FAIL lines below name the flag, column or level it tripped on.' -f $env:SELFTEST_EXIT))
+              $body.Add('')
+              $body.Add('New-HayabusaArgument or the result handling likely needs a fix before the tested version is raised.')
+              $body.Add('')
+              $body.Add($fence)
+              $body.Add($output)
+              $body.Add($fence)
+          }
+          $body.Add('')
+          $body.Add("Run: $env:RUN_URL")
+          $bodyFile = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'issue-body.md'
+          [System.IO.File]::WriteAllText($bodyFile, ($body -join "`n"))
+
+          gh label create $label --repo $env:REPO --color 'c5def5' --description 'Result of the scheduled Hayabusa compatibility check' --force
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not create or update the $label label (gh exit code $LASTEXITCODE)."
+          }
+
+          $json = gh issue list --repo $env:REPO --label $label --state open --limit 200 --json 'number,title'
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not list open $label issues (gh exit code $LASTEXITCODE)."
+          }
+          $pattern = '^Hayabusa ' + [regex]::Escape($env:VERSION) + ' (passes|FAILS) compatibility check$'
+          $existing = @(($json -join "`n") | ConvertFrom-Json | Where-Object { $_.title -match $pattern })
+
+          $same = @($existing | Where-Object { $_.title -ceq $title })
+          if ($same.Count -gt 0) {
+              "Issue #$($same[0].number) already reports this result for Hayabusa $env:VERSION. Nothing filed."
+              exit 0
+          }
+          if ($existing.Count -gt 0) {
+              # The result changed since the open issue was filed.
+              gh issue comment $existing[0].number --repo $env:REPO --body-file $bodyFile
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Could not comment on issue #$($existing[0].number) (gh exit code $LASTEXITCODE)."
+              }
+              "Commented the new result on issue #$($existing[0].number)."
+              exit 0
+          }
+
+          gh issue create --repo $env:REPO --title $title --label $label --body-file $bodyFile
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not create the issue (gh exit code $LASTEXITCODE)."
+          }

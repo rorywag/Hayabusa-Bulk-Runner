@@ -17,6 +17,12 @@ foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
 
+# The fake Hayabusa reports the tested version in its help banner, so the
+# version notice is tested against whatever lib/Hayabusa.ps1 says. It runs
+# as its own process, so the version reaches it through the environment.
+$env:FAKE_HAYABUSA_VERSION = $script:TestedHayabusaVersion
+$script:FakeVersionLine = "Hayabusa v$($script:TestedHayabusaVersion) - Suzumushi Release"
+
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -267,8 +273,8 @@ function New-RollupFixture {
     }
     $runs = New-TestDirectory -Path (Join-Path -Path $out -ChildPath '_runs')
     $metas = @(
-        @{ File = 'run_meta_20261010T010000Z_run1.json'; M = @{ RunId = 'run1'; StartedUtc = '2026-10-10T01:00:00Z'; Selection = @{ MinLevel = 'high'; ExactLevel = $null; Profile = 'standard' }; Hayabusa = @{ Version = 'Hayabusa v4.1.0'; RulesVersion = 'newest rule file 2026-09-30T12:00:00Z, 4000 rule files' } } }
-        @{ File = 'run_meta_20261010T020000Z_run2.json'; M = @{ RunId = 'run2'; StartedUtc = '2026-10-10T02:00:00Z'; Selection = @{ MinLevel = $null; ExactLevel = 'critical'; Profile = 'standard' }; Hayabusa = @{ Version = 'Hayabusa v4.1.0'; RulesVersion = 'x' } } }
+        @{ File = 'run_meta_20261010T010000Z_run1.json'; M = @{ RunId = 'run1'; StartedUtc = '2026-10-10T01:00:00Z'; Selection = @{ MinLevel = 'high'; ExactLevel = $null; Profile = 'standard' }; Hayabusa = @{ Version = "Hayabusa v$($script:TestedHayabusaVersion)"; RulesVersion = 'newest rule file 2026-09-30T12:00:00Z, 4000 rule files' } } }
+        @{ File = 'run_meta_20261010T020000Z_run2.json'; M = @{ RunId = 'run2'; StartedUtc = '2026-10-10T02:00:00Z'; Selection = @{ MinLevel = $null; ExactLevel = 'critical'; Profile = 'standard' }; Hayabusa = @{ Version = "Hayabusa v$($script:TestedHayabusaVersion)"; RulesVersion = 'x' } } }
         @{ File = 'run_meta_20261010T030000Z.json'; M = @{ RunId = 'run3'; StartedUtc = '2026-10-10T03:00:00Z'; Selection = @{ MinLevel = 'medium'; Profile = 'verbose' }; Hayabusa = @{ Version = $null; RulesVersion = $null } } }
     )
     foreach ($m in $metas) {
