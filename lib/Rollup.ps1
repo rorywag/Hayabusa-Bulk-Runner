@@ -247,7 +247,7 @@ function Get-RunProvenance {
             # ConvertFrom-Json in 7.x turns ISO timestamps into DateTime.
             $startedValue = Get-JsonValue -Object $meta -Name 'StartedUtc'
             if ($startedValue -is [datetime]) {
-                $started = $startedValue.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                $started = $startedValue.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
             }
             elseif ($null -ne $startedValue) {
                 $started = [string]$startedValue
@@ -513,7 +513,7 @@ function Get-RollupData {
     [pscustomobject]@{
         OutputRoot   = $OutputRoot
         ManifestPath = $manifestPath
-        BuiltUtc     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        BuiltUtc     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
         Hosts        = $sortedHosts
         Rules        = $sortedRules
         Provenance   = $provenance

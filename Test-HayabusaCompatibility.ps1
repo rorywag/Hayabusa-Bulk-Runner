@@ -113,7 +113,7 @@ Assert-HayabusaHost
 $HayabusaPath = ConvertTo-NormalizedPath -Path $HayabusaPath
 $RulesPath = ConvertTo-NormalizedPath -Path $RulesPath
 
-$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ', [System.Globalization.CultureInfo]::InvariantCulture)
 $workDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "hayabusa-compat-$stamp-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 New-Item -ItemType Directory -Path $workDir | Out-Null
 

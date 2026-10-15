@@ -298,7 +298,7 @@ function Write-ZipRefusalLog {
     )
 
     $lines = @(
-        "Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+        "Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture))"
         "Source: $($Collection.Source)"
         (Get-ZipGuidance -Source $Collection.Source -Info $Collection.Zip)
         "Detail: $($Collection.Zip.ReadError)"

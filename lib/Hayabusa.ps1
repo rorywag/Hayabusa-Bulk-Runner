@@ -241,7 +241,7 @@ function Invoke-HayabusaProcess {
     $encoding = New-Object System.Text.UTF8Encoding($false)
     $writer = New-Object System.IO.StreamWriter($LogPath, $false, $encoding)
     try {
-        $writer.WriteLine("Started (UTC): $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+        $writer.WriteLine("Started (UTC): $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture))")
         $writer.WriteLine("Binary: $HayabusaPath")
         $writer.WriteLine('Arguments:')
         foreach ($a in $Argument) {
@@ -257,7 +257,7 @@ function Invoke-HayabusaProcess {
 
         $writer.WriteLine('--- end ---')
         $writer.WriteLine("Exit code: $exit")
-        $writer.WriteLine("Finished (UTC): $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+        $writer.WriteLine("Finished (UTC): $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture))")
         return $exit
     }
     finally {
@@ -406,7 +406,7 @@ function Get-RulesVersion {
 
     $newest = $null
     if ($files.Count -gt 0) {
-        $newest = ($files | Sort-Object -Property LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $newest = ($files | Sort-Object -Property LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
     }
 
     $summary = 'no rule files found'
