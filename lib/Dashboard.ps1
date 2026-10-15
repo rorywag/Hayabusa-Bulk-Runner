@@ -42,7 +42,7 @@ h2 { font-size: 17px; margin: 28px 0 10px; }
 .tile .n { font-size: 24px; font-weight: 600; }
 .tile .l { color: var(--muted); font-size: 12px; }
 .tile.emer .n { color: var(--emer); } .tile.crit .n { color: var(--crit); } .tile.high .n { color: var(--high); }
-.tile.med .n { color: var(--med); } .tile.low .n { color: var(--low); }
+.tile.med .n { color: var(--med); } .tile.low .n { color: var(--low); } .tile.info .n { color: var(--info); }
 .tile.zero { background: transparent; }
 .tile.zero .n { color: var(--muted); font-weight: 400; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
@@ -67,6 +67,7 @@ tr:last-child td { border-bottom: none; }
 .st-CompletedWithErrors { color: var(--high); background: var(--high-bg); }
 .st-Failed { color: var(--crit); background: var(--crit-bg); }
 .st-Pending, .st-Running, .st-Skipped, .st-other { color: var(--info); background: var(--info-bg); }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--info); background: var(--info-bg); margin: 1px 4px 1px 0; max-width: 100%; overflow-wrap: anywhere; }
 .tag { color: var(--muted); font-size: 12px; margin-left: 4px; }
 .notes { color: var(--muted); font-size: 12px; max-width: 420px; overflow-wrap: anywhere; }
 .err { color: var(--crit); }
@@ -215,17 +216,17 @@ function New-DashboardHtml {
     $rules = @($Data.Rules)
     $sb = New-Object System.Text.StringBuilder
     $e = { param($v) ConvertTo-HtmlText -Text $v }
+    # A name as a grey chip. Chips flow inline and wrap within their cell,
+    # and a long name breaks rather than widening the table.
+    $chip = { param($v) "<span class=`"chip`">$(& $e $v)</span>" }
 
     $sum = { param($prop) $t = 0; foreach ($h in $hosts) { if ($null -ne $h.$prop) { $t += [int]$h.$prop } }; $t }
-    $withAny = { param($prop) @($hosts | Where-Object { $null -ne $_.$prop -and [int]$_.$prop -gt 0 }).Count }
     $emerTotal = & $sum 'Emergency'
     $critTotal = & $sum 'Critical'
     $highTotal = & $sum 'High'
     $medTotal = & $sum 'Medium'
     $lowTotal = & $sum 'Low'
-    $hostsEmer = & $withAny 'Emergency'
-    $hostsCrit = & $withAny 'Critical'
-    $hostsHigh = & $withAny 'High'
+    $infoTotal = & $sum 'Informational'
     $failed = @($hosts | Where-Object { $_.Status -eq 'Failed' }).Count
     $withErrors = @($hosts | Where-Object { $_.Status -eq 'CompletedWithErrors' }).Count
     $notRun = @($hosts | Where-Object { $_.Status -eq 'Pending' -or $_.Status -eq 'Running' }).Count
@@ -255,11 +256,12 @@ function New-DashboardHtml {
         "<div class=`"tile $Class`"><div class=`"n`">$(& $e $Count)</div><div class=`"l`">$Label</div></div>"
     }
     [void]$sb.AppendLine('<div class="tiles">')
-    [void]$sb.AppendLine((& $tile 'emer' $emerTotal "emergency detections on $(& $e $hostsEmer) host(s)"))
-    [void]$sb.AppendLine((& $tile 'crit' $critTotal "critical detections on $(& $e $hostsCrit) host(s)"))
-    [void]$sb.AppendLine((& $tile 'high' $highTotal "high detections on $(& $e $hostsHigh) host(s)"))
+    [void]$sb.AppendLine((& $tile 'emer' $emerTotal 'emergency detections'))
+    [void]$sb.AppendLine((& $tile 'crit' $critTotal 'critical detections'))
+    [void]$sb.AppendLine((& $tile 'high' $highTotal 'high detections'))
     [void]$sb.AppendLine((& $tile 'med' $medTotal 'medium detections'))
     [void]$sb.AppendLine((& $tile 'low' $lowTotal 'low detections'))
+    [void]$sb.AppendLine((& $tile 'info' $infoTotal 'informational detections'))
     [void]$sb.AppendLine('</div>')
 
     $topLevels = @('emergency', 'critical', 'high')
@@ -298,7 +300,7 @@ function New-DashboardHtml {
         [void]$sb.AppendLine('<div class="wrap"><table>')
         [void]$sb.AppendLine('<thead><tr><th>Level</th><th>Rule</th><th class="n">Hosts</th><th class="n">Hits</th><th>Seen on</th></tr></thead><tbody>')
         foreach ($r in $rules) {
-            $seen = @($r.Collections | Select-Object -First $script:RuleCollectionsShown | ForEach-Object { & $e $_ }) -join ', '
+            $seen = @($r.Collections | Select-Object -First $script:RuleCollectionsShown | ForEach-Object { & $chip $_ }) -join ' '
             $more = @($r.Collections).Count - $script:RuleCollectionsShown
             if ($more -gt 0) {
                 $seen += " <span class=`"dim`">and $(& $e $more) more</span>"
@@ -315,20 +317,26 @@ function New-DashboardHtml {
     }
     else {
         [void]$sb.AppendLine('<div class="wrap"><table>')
-        [void]$sb.AppendLine('<thead><tr><th>Host</th><th>Collection</th><th>Status</th><th class="n">Emer</th><th class="n">Crit</th><th class="n">High</th><th class="n">Med</th><th class="n">Low</th><th class="n">Total</th><th>Top rule</th><th>Open</th><th>Notes</th></tr></thead><tbody>')
+        [void]$sb.AppendLine('<thead><tr><th>Hostname</th><th>Collection</th><th>Status</th><th class="n">Emer</th><th class="n">Crit</th><th class="n">High</th><th class="n">Med</th><th class="n">Low</th><th class="n">Total</th><th>Top rule</th><th>Open</th><th>Notes</th></tr></thead><tbody>')
         foreach ($h in $hosts) {
+            # Each name is a chip, from the list the rollup keeps rather than
+            # the joined label. A host with no name shows its collection.
             if ($h.HostUnknown) {
-                $hostCell = "$(& $e $h.Collection)<span class=`"tag`">host unknown</span>"
+                $hostCell = "$(& $chip $h.Collection)<span class=`"tag`">host unknown</span>"
             }
-            elseif ($h.Multiple -and $h.Host -eq '[multiple]') {
+            elseif ($h.Multiple -and @($h.HostNames).Count -eq 0) {
                 # Names could not be read from the CSV.
-                $hostCell = "<span class=`"tag`">$(& $e $h.Host)</span>"
+                $hostCell = "$(& $chip $h.Host)<span class=`"tag`">multiple</span>"
             }
             elseif ($h.Multiple) {
-                $hostCell = "$(& $e $h.Host)<span class=`"tag`">multiple</span>"
+                $hostCell = @($h.HostNames | ForEach-Object { & $chip $_ }) -join ' '
+                if ($h.HostNamesMore -gt 0) {
+                    $hostCell += " <span class=`"dim`">+$(& $e $h.HostNamesMore)</span>"
+                }
+                $hostCell += '<span class="tag">multiple</span>'
             }
             else {
-                $hostCell = & $e $h.Host
+                $hostCell = & $chip $h.Host
             }
 
             $topCell = ''

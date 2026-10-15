@@ -64,7 +64,7 @@ Describe 'Layout and content' {
         $panel | Should -Not -Match 'RuleC'
     }
     It 'shows totals and health counts' {
-        $html | Should -Match '<div class="n">6</div><div class="l">critical detections on 4 host\(s\)'
+        $html | Should -Match '<div class="n">6</div><div class="l">critical detections</div>'
         $html | Should -Match '<b>11</b> hosts'
         $html | Should -Match '<b>2</b> Failed'
         $html | Should -Match '<b>1</b> CompletedWithErrors'
@@ -79,7 +79,7 @@ Describe 'Layout and content' {
         $html.Contains('RUN/RUN_timeline.csv') | Should -BeFalse
     }
     It 'tags a clean host as host unknown' {
-        $html.Contains('<td>C<span class="tag">host unknown</span></td>') | Should -BeTrue
+        $html.Contains('<td><span class="chip">C</span><span class="tag">host unknown</span></td>') | Should -BeTrue
     }
     It 'explains a Failed row' {
         $html.Contains('<span class="err">Resolve: archive refused</span>') | Should -BeTrue
@@ -93,7 +93,23 @@ Describe 'Layout and content' {
 
 Describe 'Display refinements' {
     It 'shows a multiple-computer host by its names, with a tag' {
-        $html.Contains('<td>DC01, DC01.corp.local<span class="tag">multiple</span></td>') | Should -BeTrue
+        $html.Contains('<td><span class="chip">DC01</span> <span class="chip">DC01.corp.local</span><span class="tag">multiple</span></td>') | Should -BeTrue
+    }
+    It 'heads the host table''s first column Hostname' {
+        $html.Contains('<thead><tr><th>Hostname</th><th>Collection</th>') | Should -BeTrue
+    }
+    It 'shows a single host name as a chip' {
+        $html.Contains('<tr><td><span class="chip">WS01</span></td><td>WS01</td>') | Should -BeTrue
+    }
+    It 'shows each collection a rule was seen on as a chip' {
+        $html.Contains('<td>RuleA</td><td class="n">3</td><td class="n">5</td><td><span class="chip">MULTI</span> <span class="chip">WS01</span> <span class="chip">WS02</span></td></tr>') | Should -BeTrue
+    }
+    It 'styles chips grey, wrapping, with no fixed width' {
+        $css = [regex]::Match($html, '\.chip \{[^}]*\}').Value
+        $css | Should -Match 'color: var\(--info\); background: var\(--info-bg\);'
+        $css | Should -Match 'overflow-wrap: anywhere;'
+        $css | Should -Not -Match 'white-space: nowrap'
+        $css | Should -Not -Match '(^|[ ;{])width:'
     }
     It 'dims a zero tile and leaves a non-zero tile alone' {
         $html.Contains('<div class="tile emer zero"><div class="n">0</div>') | Should -BeTrue
@@ -131,6 +147,46 @@ Describe 'Provenance' {
     }
 }
 
+Describe 'Host chips for many computers' {
+    BeforeAll {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'chips')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        $rows = @($TimelineHeader)
+        foreach ($n in @('WS01', 'WS02', 'WS03', 'WS04', 'WS05')) { $rows += @(New-TimelineRow $n 'high' 'RuleX') }
+        Set-RunManifestEntry -Path $m -Collection 'MANY' -Source 'MANY' -RunId 'c1' -InputType Loose -Status Completed -HostName '[multiple]'
+        Write-TestText -Path (Get-CollectionOutputPath -OutputRoot $o -Collection 'MANY').Csv -Line ([string[]]$rows) | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'UNREAD' -Source 'UNREAD' -RunId 'c1' -InputType Loose -Status Pending -HostName '[multiple]'
+        Invoke-Rollup -OutputRoot $o -WarningAction SilentlyContinue | Out-Null
+        $script:ch = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
+    }
+
+    It 'shows up to three names as chips, then +N, then the tag' {
+        $ch.Contains('<td><span class="chip">WS01</span> <span class="chip">WS02</span> <span class="chip">WS03</span> <span class="dim">+2</span><span class="tag">multiple</span></td>') | Should -BeTrue
+    }
+    It 'shows [multiple] as a chip when the names cannot be read' {
+        $ch.Contains('<td><span class="chip">[multiple]</span><span class="tag">multiple</span></td><td>UNREAD</td>') | Should -BeTrue
+    }
+}
+
+Describe 'Informational in the dashboard' {
+    BeforeAll {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'info')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'INFO' -Source 'INFO' -RunId 'i1' -InputType Loose -Status Completed -HostName 'IN01'
+        Write-TestText -Path (Get-CollectionOutputPath -OutputRoot $o -Collection 'INFO').Csv -Line @(@($TimelineHeader) + @(New-TimelineRowSet 'IN01' 'info' 'Logon' 2)) | Out-Null
+        Invoke-Rollup -OutputRoot $o -WarningAction SilentlyContinue | Out-Null
+        $script:ih = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
+    }
+
+    It 'has an informational tile with its count, coloured, after the low tile' {
+        $ih | Should -Match '<div class="tile info"><div class="n">2</div><div class="l">informational detections</div></div>'
+        $ih.IndexOf('tile low') | Should -BeLessThan $ih.IndexOf('tile info')
+        $ih | Should -Match '\.tile\.info \.n \{ color: var\(--info\); \}'
+    }
+}
+
 Describe 'Emergency in the dashboard' {
     BeforeAll {
         $o = New-TestDirectory (Join-TestPath $TestDrive 'emer')
@@ -150,8 +206,11 @@ Describe 'Emergency in the dashboard' {
         $script:eh = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
     }
 
-    It 'has an emergency tile with its count and host count' {
-        $eh | Should -Match '<div class="tile emer"><div class="n">3</div><div class="l">emergency detections on 2 host\(s\)</div></div>'
+    It 'has an emergency tile with its count' {
+        $eh | Should -Match '<div class="tile emer"><div class="n">3</div><div class="l">emergency detections</div></div>'
+    }
+    It 'dims the informational tile when there are none' {
+        $eh | Should -Match '<div class="tile info zero"><div class="n">0</div><div class="l">informational detections</div></div>'
     }
     It 'puts the emergency tile before critical' {
         $eh.IndexOf('tile emer') | Should -BeLessThan $eh.IndexOf('tile crit')
@@ -169,6 +228,6 @@ Describe 'Emergency in the dashboard' {
     }
     It 'has an Emer column before Crit in the host table' {
         $eh | Should -Match '<th class="n">Emer</th><th class="n">Crit</th>'
-        $eh | Should -Match '<td>BO01</td><td>BOTH</td><td><span class="badge st-Completed">Completed</span></td><td class="n">2</td><td class="n">5</td>'
+        $eh | Should -Match '<td><span class="chip">BO01</span></td><td>BOTH</td><td><span class="badge st-Completed">Completed</span></td><td class="n">2</td><td class="n">5</td>'
     }
 }
