@@ -28,7 +28,7 @@ if ($argv.Count -gt 0 -and $argv[0] -eq 'help') {
         [Console]::Error.WriteLine('FAKE_HAYABUSA_VERSION is not set. Dot-source tests/Helpers/TestHelpers.ps1 first.')
         exit 3
     }
-    $banner = "Hayabusa v$($env:FAKE_HAYABUSA_VERSION) - Suzumushi Release"
+    $banner = "Hayabusa v$($env:FAKE_HAYABUSA_VERSION) - Autumn Release"
     if ($env:FAKE_HELP_MODE -eq 'silent') {
         [Console]::Out.WriteLine('usage only')
         exit 0

@@ -21,7 +21,11 @@ foreach ($lib in $script:LibOrder) {
 # version notice is tested against whatever lib/Hayabusa.ps1 says. It runs
 # as its own process, so the version reaches it through the environment.
 $env:FAKE_HAYABUSA_VERSION = $script:TestedHayabusaVersion
-$script:FakeVersionLine = "Hayabusa v$($script:TestedHayabusaVersion) - Suzumushi Release"
+$script:FakeVersionLine = "Hayabusa v$($script:TestedHayabusaVersion) - Autumn Release"
+# A version that is never the tested one, the next minor release, for the
+# tests of what happens when the versions differ.
+$testedParts = $script:TestedHayabusaVersion.Split('.')
+$script:OtherHayabusaVersion = '{0}.{1}.0' -f $testedParts[0], ([int]$testedParts[1] + 1)
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
