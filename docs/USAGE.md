@@ -198,7 +198,7 @@ It builds a one-event Security log in a temporary folder and runs Hayabusa over 
 
 The sample event is Security 1102, which Hayabusa's own "Log Cleared" rule detects at level high. A detection is needed because Hayabusa writes an empty CSV, with no header row, when it detects nothing, which leaves no columns to check. Three runs must drop that detection: `-e critical`, `--include-tag` with a tag the rule doesn't carry, and `--exclude-tag` with the tag it does. Each passes only when it detects nothing, so a release that accepts a filter but ignores it fails the check. They also show a clean run with no detections passes.
 
-- **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, and the Hayabusa version the README gives under Status and Requirements. No code change is needed.
+- **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, then set the same version between each pair of tested-version markers: two in the README, under Status and Requirements, and two in this file, under Not yet confirmed on Windows and this section. A test fails if any of them doesn't match. No code change is needed.
 - **Red:** the FAIL line names the flag, column or level that changed, and for a refused flag, what Hayabusa said on stderr. Fix `New-HayabusaArgument` in `lib\Hayabusa.ps1`, or the result handling in `lib\Results.ps1`, then run the check again.
 
 ## Running the tests

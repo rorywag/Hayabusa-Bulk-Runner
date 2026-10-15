@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The compatibility watcher files one issue per release and stays quiet until something changes. When the result flips it comments and retitles the issue to the new result, so the next run matches it instead of commenting again every week. Closed issues count too, so a release closed without adopting it isn't filed again. A FAIL whose failing checks change gets a comment naming the new ones, where it used to say nothing.
 - Timestamps in the manifest, run-meta, logs, the dashboard and file names are written the same way whatever the Windows region settings. A locale with a different time separator used to write times like `10.20.30`, and one with another calendar, such as Thai, a different year.
 - USAGE and the 0.7.0 notes said a `MinLevel` or `ExactLevel` of emergency, with the standard rules, matches nothing and the run carries on. Hayabusa loads no rules, stops with "No rules were loaded" and exits 1, so every host fails, as the startup notice says. They now say that.
+- The README said to keep `lib` beside the two scripts. There are three: `Invoke-BulkHayabusa.ps1`, `Invoke-HayabusaRollup.ps1` and `Test-HayabusaCompatibility.ps1`.
+- The USAGE step for adopting a new Hayabusa release named only the README's tested-version markers. It now names the ones in USAGE too.
 
 ## [0.8.0] - 2026-10-15
 
