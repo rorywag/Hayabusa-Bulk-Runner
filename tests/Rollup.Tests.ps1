@@ -21,8 +21,20 @@ Describe 'triage_hosts.csv' {
         $hostsCsv.Count | Should -Be 11
         $res.HostCount | Should -Be 11
     }
-    It 'sorts worst first, problem statuses before clean among ties' {
-        ($hostsCsv.Collection -join ',') | Should -BeExactly "WS01,MULTI,'-HOST,WS02,CWE,FAILCSV,FAILNOCSV,RUN,PEND,BADCSV,C"
+    It 'sorts hosts with results first, worst first, then the rest by status' {
+        ($hostsCsv.Collection -join ',') | Should -BeExactly "WS01,MULTI,'-HOST,WS02,CWE,BADCSV,C,FAILCSV,FAILNOCSV,RUN,PEND"
+    }
+    It 'puts every row without results below every row with results' {
+        $statuses = @($hostsCsv.Status)
+        $firstOther = [array]::FindIndex([string[]]$statuses, [Predicate[string]] { param($s) $s -ne 'Completed' -and $s -ne 'CompletedWithErrors' })
+        $firstOther | Should -BeGreaterThan 0
+        @($statuses[$firstOther..($statuses.Count - 1)] | Where-Object { $_ -eq 'Completed' -or $_ -eq 'CompletedWithErrors' }).Count | Should -Be 0
+        [array]::IndexOf([string[]]$hostsCsv.Collection, 'C') | Should -BeLessThan ([array]::IndexOf([string[]]$hostsCsv.Collection, 'FAILNOCSV'))
+    }
+    It 'keeps the names behind a multiple-computer label on the host row' {
+        $row = @((Get-RollupData -OutputRoot $out).Hosts | Where-Object { $_.Collection -eq 'MULTI' })[0]
+        ($row.HostNames -join ',') | Should -BeExactly 'DC01,DC01.corp.local'
+        $row.HostNamesMore | Should -Be 0
     }
     It 'aggregates counts by level from the per-host CSV' {
         $r = $byC.WS01
@@ -31,6 +43,22 @@ Describe 'triage_hosts.csv' {
         $r.Medium | Should -Be '1'
         $r.Low | Should -Be '1'
         $r.Total | Should -Be '8'
+        $row = @((Get-RollupData -OutputRoot $out).Hosts | Where-Object { $_.Collection -eq 'WS01' })[0]
+        $row.Informational | Should -Be 0
+    }
+    It 'carries an Informational count on the host row, blank without results' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'info-count')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'INFO' -Source 'INFO' -RunId 'r' -InputType Loose -Status Completed -HostName 'WS01'
+        Write-TestText -Path (Get-CollectionOutputPath -OutputRoot $o -Collection 'INFO').Csv -Line @(@($TimelineHeader) + @(New-TimelineRowSet 'WS01' 'info' 'Logon' 2) + @(New-TimelineRow 'WS01' 'informational' 'Logoff') + @(New-TimelineRow 'WS01' 'high' 'RuleB')) | Out-Null
+        Set-RunManifestEntry -Path $m -Collection 'NONE' -Source 'NONE' -RunId 'r' -InputType Loose -Status Failed -ErrorMessage @('Resolve: refused')
+        $rows = @{}
+        foreach ($h in (Get-RollupData -OutputRoot $o).Hosts) { $rows[$h.Collection] = $h }
+        $rows.INFO.Informational | Should -Be 3
+        $rows.INFO.High | Should -Be 1
+        $rows.INFO.Total | Should -Be 4
+        $rows.NONE.Informational | Should -BeNullOrEmpty
     }
     It 'counts full and short level names alike' {
         $byC.WS02.Critical | Should -Be '1'

@@ -9,8 +9,9 @@ $script:SeverityRank = @{
     'informational' = 1
 }
 
-# Among hosts with equal counts, problem rows sort first so they are not
-# hidden among clean ones.
+# Hosts with results sort first, worst first. Among hosts with equal
+# counts, and among the hosts without results below them, problem rows sort
+# first so they are not hidden among clean ones.
 $script:StatusPriority = @{
     'Failed'              = 0
     'CompletedWithErrors' = 1
@@ -311,11 +312,14 @@ function Get-RollupData {
 
         Hosts: one row per manifest row. A blank Host becomes [unknown]. A
         [multiple] Host is shown by its computer names when the CSV can be
-        read, and stays [multiple] when it cannot.
+        read, and stays [multiple] when it cannot. HostNames holds the names
+        to show, up to three, and HostNamesMore how many more there are.
         Counts are null, shown blank, when there is no readable CSV, so a
-        host that never produced results does not read as clean. Sorted by
-        Emergency, Critical, High, Medium, Low and Total, highest first, then problem
-        statuses first, then Collection.
+        host that never produced results does not read as clean. Rows with
+        results, Completed or CompletedWithErrors, sort first, by Emergency,
+        Critical, High, Medium, Low and Total, highest first. Every other
+        row sorts below them. Within each group, ties go to problem statuses
+        first, then Collection.
 
         Rules: one row per RuleTitle and Level. HostsAffected counts
         collections, so a [multiple] collection counts once even though it
@@ -389,11 +393,20 @@ function Get-RollupData {
             $hostName = $script:UnknownHostMarker
         }
         $multiple = ($hostName -eq $script:MultipleHostMarker)
+        $hostNames = @()
+        $hostNamesMore = 0
+        if (-not $hostUnknown -and -not $multiple) {
+            $hostNames = @($hostName)
+        }
         if ($multiple -and $null -ne $detection) {
             try {
-                $label = Get-MultipleHostLabel -Computers (Get-HayabusaResultSummary -CsvPath $paths.Csv).Computers
+                $computers = (Get-HayabusaResultSummary -CsvPath $paths.Csv).Computers
+                $label = Get-MultipleHostLabel -Computers $computers
                 if (-not [string]::IsNullOrEmpty($label)) {
                     $hostName = $label
+                    $allNames = @($computers.Keys)
+                    $hostNames = @($allNames | Select-Object -First $script:MultipleHostNamesShown)
+                    $hostNamesMore = [math]::Max(0, $allNames.Count - $script:MultipleHostNamesShown)
                 }
             }
             catch {
@@ -417,9 +430,9 @@ function Get-RollupData {
             }
         }
 
-        $em = $null; $c = $null; $h = $null; $m = $null; $l = $null; $t = $null
+        $em = $null; $c = $null; $h = $null; $m = $null; $l = $null; $inf = $null; $t = $null
         if ($null -ne $detection) {
-            $em = $detection.Emergency; $c = $detection.Critical; $h = $detection.High; $m = $detection.Medium; $l = $detection.Low; $t = $detection.Total
+            $em = $detection.Emergency; $c = $detection.Critical; $h = $detection.High; $m = $detection.Medium; $l = $detection.Low; $inf = $detection.Informational; $t = $detection.Total
         }
         $topTitle = $null
         $topLevel = $null
@@ -429,30 +442,34 @@ function Get-RollupData {
         }
 
         $hosts.Add([pscustomobject]@{
-                Host         = $hostName
-                HostUnknown  = $hostUnknown
-                Multiple     = $multiple
-                Collection   = $collection
-                Source       = [string]$entry.Source
-                Status       = [string]$entry.Status
-                Emergency    = $em
-                Critical     = $c
-                High         = $h
-                Medium       = $m
-                Low          = $l
-                Total        = $t
-                TopRule      = $topTitle
-                TopRuleLevel = $topLevel
-                Warning      = [string]$entry.Warning
-                Error        = [string]$entry.Error
-                ReadError    = $readError
-                RunId        = [string]$entry.RunId
-                Links        = $links
+                Host          = $hostName
+                HostNames     = $hostNames
+                HostNamesMore = $hostNamesMore
+                HostUnknown   = $hostUnknown
+                Multiple      = $multiple
+                Collection    = $collection
+                Source        = [string]$entry.Source
+                Status        = [string]$entry.Status
+                Emergency     = $em
+                Critical      = $c
+                High          = $h
+                Medium        = $m
+                Low           = $l
+                Informational = $inf
+                Total         = $t
+                TopRule       = $topTitle
+                TopRuleLevel  = $topLevel
+                Warning       = [string]$entry.Warning
+                Error         = [string]$entry.Error
+                ReadError     = $readError
+                RunId         = [string]$entry.RunId
+                Links         = $links
             })
     }
 
     $zero = { param($v) if ($null -eq $v) { 0 } else { [int]$v } }
     $sortedHosts = @($hosts | Sort-Object -Property @(
+            @{ Expression = { if ($script:ResultStatuses -contains $_.Status) { 0 } else { 1 } }; Descending = $false }
             @{ Expression = { & $zero $_.Emergency }; Descending = $true }
             @{ Expression = { & $zero $_.Critical }; Descending = $true }
             @{ Expression = { & $zero $_.High }; Descending = $true }
