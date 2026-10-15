@@ -407,3 +407,38 @@ Describe 'A Running mark that fails when the final write succeeds' {
         $row.Error | Should -Be ''
     }
 }
+
+Describe 'A rerun that fails before Hayabusa starts' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:R = New-BatchRoot 'prepfail'
+        New-FakeHost -InputRoot $R.In -Name 'H1' -Files @{ 'r.csv' = $good } | Out-Null
+        Invoke-TestBatch $R 'run1' | Out-Null
+        $script:first = (Get-ManifestRowMap $R)['H1']
+        $script:p = Get-CollectionOutputPath -OutputRoot $R.Out -Collection 'H1'
+        $script:hadLog = Test-Path -LiteralPath $p.Log -PathType Leaf
+        $script:callsRun1 = @(Get-FakeCall $R).Count
+        Mock Resolve-CollectionInput { throw 'The image would not mount.' }
+        Invoke-TestBatch $R 'run2' -Force | Out-Null
+        $script:second = (Get-ManifestRowMap $R)['H1']
+        $script:callsRun2 = @(Get-FakeCall $R).Count
+        Invoke-Rollup -OutputRoot $R.Out -WarningAction SilentlyContinue | Out-Null
+        $script:html = [System.IO.File]::ReadAllText((Join-TestPath $R.Out 'triage_dashboard.html'))
+    }
+
+    It 'starts from a finished first run with a log' {
+        $first.Status | Should -Be 'Completed'
+        $hadLog | Should -BeTrue
+    }
+    It 'records the rerun Failed with its own error, without running Hayabusa' {
+        $second.RunId | Should -Be 'run2'
+        $second.Status | Should -Be 'Failed'
+        $second.Error | Should -BeLike '*The image would not mount.*'
+        $callsRun1 | Should -Be 1
+        $callsRun2 | Should -Be 0 -Because 'the fake Hayabusa records every call, and this run must not reach it'
+    }
+    It 'removes the earlier run''s log, so the Failed row links none' {
+        Test-Path -LiteralPath $p.Log | Should -BeFalse
+        $html.Contains('H1/H1_hayabusa.log') | Should -BeFalse
+    }
+}
