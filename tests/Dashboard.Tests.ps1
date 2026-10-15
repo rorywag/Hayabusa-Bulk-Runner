@@ -31,7 +31,7 @@ Describe 'Evidence values in the dashboard' {
         $html | Should -Not -Match '(?i)<link'
     }
     It 'only uses badge classes from known values' {
-        $known = @('emergency', 'critical', 'high', 'medium', 'low', 'informational', 'other', 'Completed', 'CompletedWithErrors', 'Failed', 'Pending', 'Running', 'Skipped')
+        $known = @('emergency', 'critical', 'high', 'medium', 'low', 'informational', 'other', 'Completed', 'CompletedWithErrors', 'Failed', 'Pending', 'Running', 'Skipped', 'Unreadable')
         $classes = @([regex]::Matches($html, 'class="badge (lv|st)-([^"]+)"') | ForEach-Object { $_.Groups[2].Value } | Sort-Object -Unique)
         @($classes | Where-Object { $known -notcontains $_ }).Count | Should -Be 0
     }
@@ -43,6 +43,19 @@ Describe 'Encoders' {
     }
     It 'URL-encodes then HTML-encodes an href' {
         ConvertTo-RelativeHref -Segment @('a b&c', 'x"y.html') | Should -BeExactly 'a%20b%26c/x%22y.html'
+    }
+}
+
+Describe 'Paths in notes' {
+    It 'strips OutputRoot <Root> only where it starts a path' -ForEach @(
+        @{ Root = 'D:\'; Text = 'Hayabusa failed: disk full. See D:\H1\H1_hayabusa.log'; Expected = 'Hayabusa failed: disk full. See H1\H1_hayabusa.log' }
+        @{ Root = 'D:'; Text = 'Resolve: could not read D:\H1\x.vhdx'; Expected = 'Resolve: could not read H1\x.vhdx' }
+        @{ Root = 'D:\Case\Out'; Text = 'See d:\case\out\H1\H1_hayabusa.log'; Expected = 'See H1\H1_hayabusa.log' }
+        @{ Root = 'D:\Case\Out\'; Text = 'Left D:\Case\Outer\H1 and E:\D:\Case\Out\H1'; Expected = 'Left D:\Case\Outer\H1 and E:\D:\Case\Out\H1' }
+        @{ Root = '/cases/out'; Text = 'missing column(s) RuleTitle: /cases/out/H1/H1_timeline.csv'; Expected = 'missing column(s) RuleTitle: H1/H1_timeline.csv' }
+        @{ Root = '/'; Text = 'failed: /H1/H1_timeline.csv'; Expected = 'failed: /H1/H1_timeline.csv' }
+    ) {
+        ConvertTo-RelativeNote -Text $Text -OutputRoot $Root | Should -BeExactly $Expected
     }
 }
 
@@ -80,6 +93,13 @@ Describe 'Layout and content' {
     }
     It 'tags a clean host as host unknown' {
         $html.Contains('<td><span class="chip">C</span><span class="tag">host unknown</span></td>') | Should -BeTrue
+    }
+    It 'badges and counts a host whose CSV could not be read as Unreadable' {
+        $row = [regex]::Match($html, '<tr><td>[^\n]*?<td>BADCSV</td>[^\n]*</tr>').Value
+        $row.Contains('<span class="badge st-Unreadable">Unreadable</span>') | Should -BeTrue
+        $row.Contains('st-Completed') | Should -BeFalse
+        $row.Contains('<span class="err">Rollup could not read the CSV: ') | Should -BeTrue
+        $html | Should -Match '<b>1</b> Unreadable'
     }
     It 'explains a Failed row' {
         $html.Contains('<span class="err">Resolve: archive refused</span>') | Should -BeTrue

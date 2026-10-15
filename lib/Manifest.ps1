@@ -276,7 +276,7 @@ function New-RunManifestRow {
         Warning     = (ConvertTo-ManifestText -Message $WarningMessage)
         Error       = (ConvertTo-ManifestText -Message $ErrorMessage)
         DurationSec = [math]::Round($DurationSec, 1)
-        Timestamp   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        Timestamp   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
     }
 }
 

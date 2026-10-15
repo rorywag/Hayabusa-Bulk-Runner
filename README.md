@@ -45,7 +45,7 @@ Clone the repository, or download it as a ZIP from GitHub and extract it:
 git clone https://github.com/rorywag/Hayabusa-Bulk-Runner.git
 ```
 
-Keep the `lib` folder beside the two scripts, since they load everything from it. Windows marks files from a downloaded ZIP as coming from the internet. The Process-scope execution policy shown below already allows them, so there's nothing to unblock.
+Keep the `lib` folder beside the three scripts, `Invoke-BulkHayabusa.ps1`, `Invoke-HayabusaRollup.ps1` and `Test-HayabusaCompatibility.ps1`, since they load everything from it. Windows marks files from a downloaded ZIP as coming from the internet. The Process-scope execution policy shown below already allows them, so there's nothing to unblock.
 
 ## Quick start
 

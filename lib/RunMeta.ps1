@@ -25,7 +25,7 @@ function Get-RunMetaPath {
         [string]$RunId
     )
 
-    $stamp = $StartedUtc.ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+    $stamp = $StartedUtc.ToUniversalTime().ToString('yyyyMMddTHHmmssZ', [System.Globalization.CultureInfo]::InvariantCulture)
     $runsDir = Join-Path -Path $OutputRoot -ChildPath '_runs'
     return (Join-Path -Path $runsDir -ChildPath "run_meta_$($stamp)_$RunId.json")
 }
@@ -96,7 +96,7 @@ function New-RunMeta {
     [ordered]@{
         SchemaVersion   = $script:RunMetaSchemaVersion
         RunId           = $RunId
-        StartedUtc      = $StartedUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        StartedUtc      = $StartedUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
         CompletedUtc    = $null
         Summary         = $null
         Rollup          = $null

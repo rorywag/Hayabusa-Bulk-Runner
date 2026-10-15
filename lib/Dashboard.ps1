@@ -9,7 +9,7 @@ $script:RuleCollectionsShown = 10
 
 # Only these values become CSS class names. Anything else maps to "other".
 $script:KnownLevels = @('emergency', 'critical', 'high', 'medium', 'low', 'informational')
-$script:KnownStatuses = @('Pending', 'Running', 'Completed', 'CompletedWithErrors', 'Failed', 'Skipped')
+$script:KnownStatuses = @('Pending', 'Running', 'Completed', 'CompletedWithErrors', 'Failed', 'Skipped', 'Unreadable')
 
 $script:DashboardCss = @'
 :root {
@@ -65,7 +65,7 @@ tr:last-child td { border-bottom: none; }
 .lv-informational, .lv-other { color: var(--info); background: var(--info-bg); }
 .st-Completed { color: var(--ok); background: var(--ok-bg); }
 .st-CompletedWithErrors { color: var(--high); background: var(--high-bg); }
-.st-Failed { color: var(--crit); background: var(--crit-bg); }
+.st-Failed, .st-Unreadable { color: var(--crit); background: var(--crit-bg); }
 .st-Pending, .st-Running, .st-Skipped, .st-other { color: var(--info); background: var(--info-bg); }
 .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--info); background: var(--info-bg); margin: 1px 4px 1px 0; max-width: 100%; overflow-wrap: anywhere; }
 .tag { color: var(--muted); font-size: 12px; margin-left: 4px; }
@@ -171,7 +171,9 @@ function ConvertTo-CountCell {
 
 function ConvertTo-RelativeNote {
     # Shows paths under OutputRoot relative to it, so a shared dashboard
-    # does not carry the case's full folder layout in its notes.
+    # does not carry the case's full folder layout in its notes. OutputRoot
+    # is only removed where it starts a path and ends at a separator, so a
+    # drive root such as D:\ can't match the "d:" inside "failed: disk".
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -187,7 +189,10 @@ function ConvertTo-RelativeNote {
         return $Text
     }
     $root = $OutputRoot.TrimEnd('\', '/')
-    $pattern = [regex]::Escape($root) + '[\\/]?'
+    if ($root.Length -eq 0) {
+        return $Text
+    }
+    $pattern = '(?<![\w.$~\\/:-])' + [regex]::Escape($root) + '[\\/]+'
     return [regex]::Replace($Text, $pattern, '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 }
 
@@ -230,6 +235,7 @@ function New-DashboardHtml {
     $failed = @($hosts | Where-Object { $_.Status -eq 'Failed' }).Count
     $withErrors = @($hosts | Where-Object { $_.Status -eq 'CompletedWithErrors' }).Count
     $notRun = @($hosts | Where-Object { $_.Status -eq 'Pending' -or $_.Status -eq 'Running' }).Count
+    $unreadable = @($hosts | Where-Object { $_.Status -eq 'Unreadable' }).Count
     $unknown = @($hosts | Where-Object { $_.HostUnknown }).Count
 
     [void]$sb.AppendLine('<!DOCTYPE html>')
@@ -283,6 +289,7 @@ function New-DashboardHtml {
     [void]$sb.AppendLine("<span><b>$(& $e $hosts.Count)</b> hosts</span>")
     [void]$sb.AppendLine("<span><b>$(& $e $failed)</b> Failed</span>")
     [void]$sb.AppendLine("<span><b>$(& $e $withErrors)</b> CompletedWithErrors</span>")
+    [void]$sb.AppendLine("<span><b>$(& $e $unreadable)</b> Unreadable</span>")
     [void]$sb.AppendLine("<span><b>$(& $e $notRun)</b> not yet run</span>")
     [void]$sb.AppendLine("<span><b>$(& $e $unknown)</b> host name unknown</span>")
     [void]$sb.AppendLine('</div>')
@@ -389,7 +396,7 @@ function New-DashboardHtml {
             [void]$sb.AppendLine("<td>$topCell</td><td class=`"links`">$linkCell</td><td class=`"notes`">$($notes.ToArray() -join '<br>')</td></tr>")
         }
         [void]$sb.AppendLine('</tbody></table></div>')
-        [void]$sb.AppendLine('<p class="dim">Blank counts mean no readable results for that collection. "host unknown" means no detections named a computer: a clean host at the floor, or one that has not produced results. HostsAffected counts collections, so a collection tagged multiple counts once however many computers it holds.</p>')
+        [void]$sb.AppendLine('<p class="dim">Blank counts mean no readable results for that collection. Unreadable means the run finished but its timeline CSV could not be read, so its results are unknown. "host unknown" means no detections named a computer: a clean host at the floor, or one that has not produced results. HostsAffected counts collections, so a collection tagged multiple counts once however many computers it holds.</p>')
     }
 
     # Provenance

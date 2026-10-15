@@ -14,6 +14,10 @@
 #             STDERR=), copies the named CSV to -o, writes a stub report to -H
 #             unless HTML=none, records
 #             its arguments beside -o and appends -d to FAKE_CALLS if set.
+#             SAMPLE_LEVEL= and SAMPLE_TAGS= describe the one detection in
+#             the CSV. When SAMPLE_LEVEL is set, -m, -e, --include-tag and
+#             --exclude-tag are applied to it, and a run that drops it gets
+#             an empty CSV, as Hayabusa writes when nothing matches.
 
 $argv = @($args | ForEach-Object { [string]$_ })
 $esc = [char]27
@@ -63,11 +67,19 @@ if ($argv -ccontains '--include-tag' -and $argv -ccontains '--exclude-tag') {
 $inputPath = $null
 $csvPath = $null
 $htmlPath = $null
+$minLevel = $null
+$exactLevel = $null
+$includeTags = $null
+$excludeTags = $null
 for ($i = 0; $i -lt $argv.Count - 1; $i++) {
     switch -CaseSensitive ($argv[$i]) {
         '-d' { $inputPath = $argv[$i + 1] }
         '-o' { $csvPath = $argv[$i + 1] }
         '-H' { $htmlPath = $argv[$i + 1] }
+        '-m' { $minLevel = $argv[$i + 1] }
+        '-e' { $exactLevel = $argv[$i + 1] }
+        '--include-tag' { $includeTags = @($argv[$i + 1].Split(',')) }
+        '--exclude-tag' { $excludeTags = @($argv[$i + 1].Split(',')) }
     }
 }
 
@@ -79,7 +91,7 @@ if (-not [string]::IsNullOrEmpty($env:FAKE_CALLS) -and $null -ne $inputPath) {
     [System.IO.File]::AppendAllText($env:FAKE_CALLS, $inputPath + [Environment]::NewLine)
 }
 
-$behavior = @{ EXIT = '0'; CSV = 'none'; HTML = 'stub'; STDERR = '' }
+$behavior = @{ EXIT = '0'; CSV = 'none'; HTML = 'stub'; STDERR = ''; SAMPLE_LEVEL = ''; SAMPLE_TAGS = '' }
 if ($null -ne $inputPath) {
     $behaviorFile = Join-Path -Path $inputPath -ChildPath 'fake.behavior'
     if (Test-Path -LiteralPath $behaviorFile) {
@@ -96,8 +108,23 @@ if ($null -ne $inputPath) {
 if (-not [string]::IsNullOrEmpty($behavior.STDERR)) {
     [Console]::Error.WriteLine($behavior.STDERR)
 }
+$detected = $true
+if (-not [string]::IsNullOrEmpty($behavior.SAMPLE_LEVEL)) {
+    $ranks = @('informational', 'low', 'medium', 'high', 'critical', 'emergency')
+    $rank = [array]::IndexOf($ranks, $behavior.SAMPLE_LEVEL)
+    $tags = @($behavior.SAMPLE_TAGS.Split(',') | Where-Object { $_ })
+    if ($null -ne $minLevel -and $rank -lt [array]::IndexOf($ranks, $minLevel)) { $detected = $false }
+    if ($null -ne $exactLevel -and $rank -ne [array]::IndexOf($ranks, $exactLevel)) { $detected = $false }
+    if ($null -ne $includeTags -and @($tags | Where-Object { $includeTags -contains $_ }).Count -eq 0) { $detected = $false }
+    if ($null -ne $excludeTags -and @($tags | Where-Object { $excludeTags -contains $_ }).Count -gt 0) { $detected = $false }
+}
 if ($behavior.CSV -ne 'none' -and $null -ne $csvPath) {
-    Copy-Item -LiteralPath (Join-Path -Path $inputPath -ChildPath $behavior.CSV) -Destination $csvPath -Force
+    if ($detected) {
+        Copy-Item -LiteralPath (Join-Path -Path $inputPath -ChildPath $behavior.CSV) -Destination $csvPath -Force
+    }
+    else {
+        [System.IO.File]::WriteAllText($csvPath, '')
+    }
 }
 if ($behavior.HTML -ne 'none' -and $null -ne $htmlPath) {
     [System.IO.File]::WriteAllText($htmlPath, '<html></html>')

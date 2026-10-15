@@ -175,3 +175,41 @@ Describe 'Atomic replace' {
         Should -Invoke Move-Item -Times 0 -Exactly
     }
 }
+
+Describe 'Timestamps under another culture' {
+    BeforeAll {
+        # Thai uses the Buddhist calendar, 543 years ahead, and this copy also
+        # uses '.' as its time separator, as some locales do.
+        $script:culture = ([System.Globalization.CultureInfo]::new('th-TH')).Clone()
+        $script:culture.DateTimeFormat.TimeSeparator = '.'
+        $script:stampPattern = '^20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
+        function script:Invoke-InCulture([scriptblock]$Script) {
+            $thread = [System.Threading.Thread]::CurrentThread
+            $saved = $thread.CurrentCulture
+            try {
+                $thread.CurrentCulture = $culture
+                & $Script
+            }
+            finally {
+                $thread.CurrentCulture = $saved
+            }
+        }
+    }
+
+    It 'names the run-meta file with Gregorian digits' {
+        $t = New-Object DateTime 2026, 10, 11, 9, 5, 7, ([DateTimeKind]::Utc)
+        $leaf = Invoke-InCulture { Split-Path -Leaf (Get-RunMetaPath -OutputRoot $TestDrive -StartedUtc $t -RunId 'r1') }
+        $leaf | Should -BeExactly 'run_meta_20261011T090507Z_r1.json'
+    }
+    It 'writes the manifest Timestamp and the rollup build time in the invariant form' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'culture-out')
+        $m = Join-TestPath $o 'run_manifest.csv'
+        Initialize-RunManifest -Path $m | Out-Null
+        $built = Invoke-InCulture {
+            Set-RunManifestEntry -Path $m -Collection 'H1' -Source 'H1' -RunId 'r1' -InputType Loose -Status Pending
+            (Get-RollupData -OutputRoot $o).BuiltUtc
+        }
+        (Get-RunManifest -Path $m)['H1'].Timestamp | Should -Match $stampPattern
+        $built | Should -Match $stampPattern
+    }
+}

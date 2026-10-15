@@ -14,11 +14,12 @@ $script:SeverityRank = @{
 # first so they are not hidden among clean ones.
 $script:StatusPriority = @{
     'Failed'              = 0
-    'CompletedWithErrors' = 1
-    'Running'             = 2
-    'Pending'             = 3
-    'Skipped'             = 4
-    'Completed'           = 5
+    'Unreadable'          = 1
+    'CompletedWithErrors' = 2
+    'Running'             = 3
+    'Pending'             = 4
+    'Skipped'             = 5
+    'Completed'           = 6
 }
 
 # Only these rows have results worth showing: counts, the report and the
@@ -26,6 +27,11 @@ $script:StatusPriority = @{
 # rerun failed before Hayabusa ran, and a Running row's may be half-written
 # by an interrupted run. The log is linked for any row that has one.
 $script:ResultStatuses = @('Completed', 'CompletedWithErrors')
+
+# Shown in place of Completed or CompletedWithErrors when the rollup can't
+# read the host's CSV, so a host with unknown results never passes for a
+# clean one. The manifest keeps the batch's own status.
+$script:UnreadableStatus = 'Unreadable'
 
 # Host marker when the manifest has no Host, which is a clean host with no
 # detections at the severity floor, or a host that never produced results.
@@ -241,7 +247,7 @@ function Get-RunProvenance {
             # ConvertFrom-Json in 7.x turns ISO timestamps into DateTime.
             $startedValue = Get-JsonValue -Object $meta -Name 'StartedUtc'
             if ($startedValue -is [datetime]) {
-                $started = $startedValue.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                $started = $startedValue.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
             }
             elseif ($null -ne $startedValue) {
                 $started = [string]$startedValue
@@ -441,6 +447,11 @@ function Get-RollupData {
             $topLevel = $topRule.Level
         }
 
+        $status = [string]$entry.Status
+        if ($null -ne $readError) {
+            $status = $script:UnreadableStatus
+        }
+
         $hosts.Add([pscustomobject]@{
                 Host          = $hostName
                 HostNames     = $hostNames
@@ -449,7 +460,7 @@ function Get-RollupData {
                 Multiple      = $multiple
                 Collection    = $collection
                 Source        = [string]$entry.Source
-                Status        = [string]$entry.Status
+                Status        = $status
                 Emergency     = $em
                 Critical      = $c
                 High          = $h
@@ -502,7 +513,7 @@ function Get-RollupData {
     [pscustomobject]@{
         OutputRoot   = $OutputRoot
         ManifestPath = $manifestPath
-        BuiltUtc     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        BuiltUtc     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
         Hosts        = $sortedHosts
         Rules        = $sortedRules
         Provenance   = $provenance

@@ -1,8 +1,8 @@
 # Hayabusa compatibility self-test. Builds a tiny event log at run time,
 # runs the binary over it with the exact arguments New-HayabusaArgument
 # builds for real runs, and checks what the rollup relies on: the flags are
-# accepted, the CSV has the columns it reads, and every Level maps to one of
-# the six known severities.
+# accepted and applied, the CSV has the columns it reads, and every Level
+# maps to one of the six known severities.
 
 # Columns the rollup reads from a Hayabusa CSV.
 $script:CompatibilityRequiredColumns = @('Level', 'Computer', 'RuleTitle')
@@ -14,6 +14,10 @@ $script:CompatibilityRequiredColumns = @('Level', 'Computer', 'RuleTitle')
 $script:CompatibilitySampleComputer = 'COMPAT-TEST'
 $script:CompatibilitySampleTimeUtc = '2026-01-15T12:00:00.0000000Z'
 $script:CompatibilitySampleTag = 'attack.defense-evasion'
+
+# A tag the sample's rule doesn't carry, so including only it must drop the
+# sample's detection.
+$script:CompatibilityOtherTag = 'attack.impact'
 
 # The time window passed in the check, with the sample event inside it.
 $script:CompatibilityTimelineStart = '2026-01-01 00:00:00 +00:00'
@@ -388,16 +392,21 @@ function Get-CompatibilityRunPlan {
         The Hayabusa runs the check makes, between them sending every flag
         New-HayabusaArgument can emit.
     .DESCRIPTION
-        baseline     the flags every run sends, with -m, --threads and the
-                     time window around the sample event
-        exact-tag    -e and --include-tag, with the verbose profile
-        exclude-tag  --exclude-tag, which drops the sample's only
-                     detection, so this is the clean zero-detection run
+        baseline       the flags every run sends, with -m, --threads and
+                       the time window around the sample event
+        exact-tag      -e high and --include-tag with the sample's tag,
+                       with the verbose profile
+        exact-level    -e critical, a level the sample's detection isn't
+        include-other  --include-tag with a tag the sample's rule lacks
+        exclude-tag    --exclude-tag with the sample's tag
 
         Hayabusa 4.1.0 refuses -m with -e and --include-tag with
-        --exclude-tag, so three runs is the fewest that cover them all. The
-        first two must detect the sample, since Hayabusa 4.1.0 writes an
-        empty CSV, with no header row, when it detects nothing.
+        --exclude-tag, so three runs is the fewest that send every flag.
+        The first two must detect the sample, since Hayabusa 4.1.0 writes an
+        empty CSV, with no header row, when it detects nothing. The last
+        three must detect nothing, which shows each filter is applied and
+        not just accepted. Filter names the flag that should drop the
+        sample in each of those.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -407,9 +416,11 @@ function Get-CompatibilityRunPlan {
     )
 
     $runs = @(
-        @{ Name = 'baseline'; ExpectDetection = $true; Threads = 1; Over = @{ MinLevel = 'informational'; TimelineStart = $script:CompatibilityTimelineStart; TimelineEnd = $script:CompatibilityTimelineEnd } }
-        @{ Name = 'exact-tag'; ExpectDetection = $true; Threads = $null; Over = @{ ExactLevel = 'high'; IncludeTags = [string[]]@($script:CompatibilitySampleTag); Profile = 'verbose' } }
-        @{ Name = 'exclude-tag'; ExpectDetection = $false; Threads = $null; Over = @{ MinLevel = 'high'; ExcludeTags = [string[]]@($script:CompatibilitySampleTag) } }
+        @{ Name = 'baseline'; ExpectDetection = $true; Filter = ''; Threads = 1; Over = @{ MinLevel = 'informational'; TimelineStart = $script:CompatibilityTimelineStart; TimelineEnd = $script:CompatibilityTimelineEnd } }
+        @{ Name = 'exact-tag'; ExpectDetection = $true; Filter = ''; Threads = $null; Over = @{ ExactLevel = 'high'; IncludeTags = [string[]]@($script:CompatibilitySampleTag); Profile = 'verbose' } }
+        @{ Name = 'exact-level'; ExpectDetection = $false; Filter = '-e critical'; Threads = $null; Over = @{ ExactLevel = 'critical' } }
+        @{ Name = 'include-other'; ExpectDetection = $false; Filter = "--include-tag $script:CompatibilityOtherTag"; Threads = $null; Over = @{ MinLevel = 'high'; IncludeTags = [string[]]@($script:CompatibilityOtherTag) } }
+        @{ Name = 'exclude-tag'; ExpectDetection = $false; Filter = "--exclude-tag $script:CompatibilitySampleTag"; Threads = $null; Over = @{ MinLevel = 'high'; ExcludeTags = [string[]]@($script:CompatibilitySampleTag) } }
     )
     foreach ($run in $runs) {
         # The same keys Resolve-RunSetting gives a real run's Selection.
@@ -429,6 +440,7 @@ function Get-CompatibilityRunPlan {
         [pscustomobject]@{
             Name            = $run.Name
             ExpectDetection = $run.ExpectDetection
+            Filter          = $run.Filter
             Threads         = $run.Threads
             Selection       = $selection
         }
@@ -522,7 +534,9 @@ function Test-CompatibilityRun {
         A non-zero exit is a possible compatibility break: the check names
         the flag, subcommand or value Hayabusa refused, from stderr in the
         log. Exit 0 with an empty CSV is a clean run with no detections,
-        which is what Hayabusa 4.1.0 writes when nothing matches. Exit 0
+        which is what Hayabusa 4.1.0 writes when nothing matches. A run
+        expected to detect nothing that still detects the sample fails,
+        because the filter in Filter was accepted but not applied. Exit 0
         with no CSV at all is a failure, because the tool counts a missing
         CSV as a failed host.
     #>
@@ -545,7 +559,10 @@ function Test-CompatibilityRun {
         [AllowEmptyCollection()]
         [string[]]$Flag,
 
-        [bool]$ExpectDetection = $false
+        [bool]$ExpectDetection = $false,
+
+        [AllowEmptyString()]
+        [string]$Filter = ''
     )
 
     $sent = $Flag -join ' '
@@ -569,6 +586,13 @@ function Test-CompatibilityRun {
     }
     elseif ($ExpectDetection -and $rows -eq 0) {
         New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "accepted, but the sample's 'Log Cleared' detection did not fire, so there is no CSV header to check. Flags sent: $sent"
+    }
+    elseif (-not $ExpectDetection -and $rows -gt 0) {
+        $what = 'the filter'
+        if (-not [string]::IsNullOrEmpty($Filter)) {
+            $what = $Filter
+        }
+        New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "accepted, but the sample was still detected ($rows detection(s)), so $what was not applied. Flags sent: $sent"
     }
     elseif ($rows -eq 0) {
         New-CompatibilityCheck -Name "run $Name" -Passed $true -Detail "accepted, no detections (empty CSV). Flags sent: $sent"
@@ -736,7 +760,7 @@ function Invoke-HayabusaCompatibilityCheck {
         }
 
         $exit = Invoke-HayabusaProcess -HayabusaPath $HayabusaPath -Argument $argument -LogPath $log
-        foreach ($c in @(Test-CompatibilityRun -Name $run.Name -ExitCode $exit -CsvPath $csv -LogPath $log -Flag (@('dfir-timeline') + $flags) -ExpectDetection $run.ExpectDetection)) {
+        foreach ($c in @(Test-CompatibilityRun -Name $run.Name -ExitCode $exit -CsvPath $csv -LogPath $log -Flag (@('dfir-timeline') + $flags) -ExpectDetection $run.ExpectDetection -Filter $run.Filter)) {
             $runChecks.Add($c)
         }
         $csvPaths.Add($csv)

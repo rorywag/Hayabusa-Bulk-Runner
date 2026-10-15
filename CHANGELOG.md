@@ -14,6 +14,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A config that sets `RulesPath` to an empty value is refused at load. It used to fall back to the config file's own folder, so every host ran against the wrong rules with no warning.
 - A host's log from an earlier run is removed as soon as the host is run again. A rerun that failed before Hayabusa started, for example an image that wouldn't mount or a ZIP over a limit, used to leave the earlier log, with its results summary, linked from the new Failed row.
+- A Completed host whose timeline CSV the rollup can't read is now shown as Unreadable, with a red badge, in the dashboard and `triage_hosts.csv`, and is listed after the Failed hosts. It used to show a green Completed badge with blank counts and sort among the clean hosts. The manifest keeps the status the run recorded.
+- `TimelineStart` and `TimelineEnd` reach Hayabusa in the documented `yyyy-MM-dd HH:mm:ss +00:00` form. An offset written as `+5:30` or `+0530` was accepted by the check but passed on as typed. It's now passed on as `+05:30`, the value that was checked.
+- The dashboard only removes OutputRoot from a note where it starts a path. It used to remove it anywhere, so an OutputRoot of `D:\` turned "failed: disk" into "faile disk".
+- The compatibility self-test now checks each filter is applied, not just accepted. Two runs are added, `-e critical` and `--include-tag` with a tag the sample's rule doesn't carry, and they and the `--exclude-tag` run fail if the sample is still detected. The `--exclude-tag` run used to pass either way, and nothing checked `-e` or `--include-tag`, so a release that accepted a filter but ignored it passed.
+- The compatibility watcher files one issue per release and stays quiet until something changes. When the result flips it comments and retitles the issue to the new result, so the next run matches it instead of commenting again every week. Closed issues count too, so a release closed without adopting it isn't filed again. A FAIL whose failing checks change gets a comment naming the new ones, where it used to say nothing.
+- Timestamps in the manifest, run-meta, logs, the dashboard and file names are written the same way whatever the Windows region settings. A locale with a different time separator used to write times like `10.20.30`, and one with another calendar, such as Thai, a different year.
+- USAGE and the 0.7.0 notes said a `MinLevel` or `ExactLevel` of emergency, with the standard rules, matches nothing and the run carries on. Hayabusa loads no rules, stops with "No rules were loaded" and exits 1, so every host fails, as the startup notice says. They now say that.
+- The README said to keep `lib` beside the two scripts. There are three: `Invoke-BulkHayabusa.ps1`, `Invoke-HayabusaRollup.ps1` and `Test-HayabusaCompatibility.ps1`.
+- The USAGE step for adopting a new Hayabusa release named only the README's tested-version markers. It now names the ones in USAGE too.
 
 ## [0.8.0] - 2026-10-15
 
@@ -40,7 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - README trimmed to a scannable front page. The full reference moved to `docs/USAGE.md`.
 - Dashboard section "Provenance" renamed to "Run details".
 - The default severity floor is now medium instead of high.
-- A run whose severity level resolves to emergency now warns at startup that no shipped Hayabusa rule is emergency, so the run matches nothing without level-tuning.
+- A run whose severity level resolves to emergency now warns at startup that no shipped Hayabusa rule is emergency, so without level-tuning no rules load and every host fails.
 
 ## [0.6.3] - 2026-10-13
 

@@ -293,7 +293,7 @@ catch {
     Write-Warning "Rollup failed: $($_.Exception.Message). Rebuild it with Invoke-HayabusaRollup.ps1 -OutputRoot $OutputRoot"
 }
 
-$runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
 $runMeta['Summary'] = $batch
 $runMeta['Rollup'] = $rollupRecord
 Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
