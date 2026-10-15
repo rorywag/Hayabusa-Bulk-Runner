@@ -22,7 +22,7 @@ Describe 'triage_hosts.csv' {
         $res.HostCount | Should -Be 11
     }
     It 'sorts hosts with results first, worst first, then the rest by status' {
-        ($hostsCsv.Collection -join ',') | Should -BeExactly "WS01,MULTI,'-HOST,WS02,CWE,BADCSV,C,FAILCSV,FAILNOCSV,RUN,PEND"
+        ($hostsCsv.Collection -join ',') | Should -BeExactly "WS01,MULTI,'-HOST,WS02,CWE,C,FAILCSV,FAILNOCSV,BADCSV,RUN,PEND"
     }
     It 'puts every row without results below every row with results' {
         $statuses = @($hostsCsv.Status)
@@ -111,6 +111,11 @@ Describe 'triage_hosts.csv' {
     It 'leaves an unreadable CSV blank and warns' {
         $byC.BADCSV.Total | Should -Be ''
         @($warns | Where-Object { $_ -like 'Rollup: BADCSV: *missing column(s) RuleTitle*' }).Count | Should -Be 1
+    }
+    It 'marks a Completed host with an unreadable CSV as Unreadable, below the clean hosts' {
+        $byC.BADCSV.Status | Should -BeExactly 'Unreadable'
+        [array]::IndexOf([string[]]$hostsCsv.Collection, 'BADCSV') | Should -BeGreaterThan ([array]::IndexOf([string[]]$hostsCsv.Collection, 'C'))
+        (Get-RunManifest -Path $mp)['BADCSV'].Status | Should -BeExactly 'Completed'
     }
 }
 

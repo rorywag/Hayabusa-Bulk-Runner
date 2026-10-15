@@ -31,7 +31,7 @@ Describe 'Evidence values in the dashboard' {
         $html | Should -Not -Match '(?i)<link'
     }
     It 'only uses badge classes from known values' {
-        $known = @('emergency', 'critical', 'high', 'medium', 'low', 'informational', 'other', 'Completed', 'CompletedWithErrors', 'Failed', 'Pending', 'Running', 'Skipped')
+        $known = @('emergency', 'critical', 'high', 'medium', 'low', 'informational', 'other', 'Completed', 'CompletedWithErrors', 'Failed', 'Pending', 'Running', 'Skipped', 'Unreadable')
         $classes = @([regex]::Matches($html, 'class="badge (lv|st)-([^"]+)"') | ForEach-Object { $_.Groups[2].Value } | Sort-Object -Unique)
         @($classes | Where-Object { $known -notcontains $_ }).Count | Should -Be 0
     }
@@ -80,6 +80,13 @@ Describe 'Layout and content' {
     }
     It 'tags a clean host as host unknown' {
         $html.Contains('<td><span class="chip">C</span><span class="tag">host unknown</span></td>') | Should -BeTrue
+    }
+    It 'badges and counts a host whose CSV could not be read as Unreadable' {
+        $row = [regex]::Match($html, '<tr><td>[^\n]*?<td>BADCSV</td>[^\n]*</tr>').Value
+        $row.Contains('<span class="badge st-Unreadable">Unreadable</span>') | Should -BeTrue
+        $row.Contains('st-Completed') | Should -BeFalse
+        $row.Contains('<span class="err">Rollup could not read the CSV: ') | Should -BeTrue
+        $html | Should -Match '<b>1</b> Unreadable'
     }
     It 'explains a Failed row' {
         $html.Contains('<span class="err">Resolve: archive refused</span>') | Should -BeTrue

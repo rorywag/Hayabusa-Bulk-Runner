@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A config that sets `RulesPath` to an empty value is refused at load. It used to fall back to the config file's own folder, so every host ran against the wrong rules with no warning.
 - A host's log from an earlier run is removed as soon as the host is run again. A rerun that failed before Hayabusa started, for example an image that wouldn't mount or a ZIP over a limit, used to leave the earlier log, with its results summary, linked from the new Failed row.
+- A Completed host whose timeline CSV the rollup can't read is now shown as Unreadable, with a red badge, in the dashboard and `triage_hosts.csv`, and is listed after the Failed hosts. It used to show a green Completed badge with blank counts and sort among the clean hosts. The manifest keeps the status the run recorded.
 
 ## [0.8.0] - 2026-10-15
 
