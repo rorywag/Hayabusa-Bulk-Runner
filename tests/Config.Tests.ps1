@@ -51,6 +51,18 @@ Describe 'Engagement config' {
         $r.Selection.TimelineEnd | Should -Be '2026-01-31 23:59:59 +00:00'
     }
 
+    It 'passes the time window on in the +00:00 form, whatever offset form was given' -ForEach @(
+        @{ Given = '2026-01-01 00:00:00 +5:30'; Expected = '2026-01-01 00:00:00 +05:30' }
+        @{ Given = '2026-01-01 00:00:00 +0530'; Expected = '2026-01-01 00:00:00 +05:30' }
+        @{ Given = '  2026-01-01 00:00:00 -08:00 '; Expected = '2026-01-01 00:00:00 -08:00' }
+    ) {
+        $r = Resolve-With "@{ TimelineStart = '$Given'; TimelineEnd = '2026-02-01 00:00:00 +0000' }"
+        $r.Selection.TimelineStart | Should -BeExactly $Expected
+        $r.Selection.TimelineEnd | Should -BeExactly '2026-02-01 00:00:00 +00:00'
+        $a = New-HayabusaArgument -InputPath 'E' -CsvPath 'c.csv' -HtmlPath 'r.html' -Selection $r.Selection -Threads 1
+        $a[[array]::IndexOf([string[]]$a, '--timeline-start') + 1] | Should -BeExactly $Expected
+    }
+
     It 'records the config hash' {
         $p = Cfg 'h.psd1' "@{ MinLevel = 'low' }"
         (Import-EngagementConfig -Path $p).Sha256 | Should -Be (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash

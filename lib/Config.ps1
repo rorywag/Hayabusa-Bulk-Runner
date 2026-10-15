@@ -294,15 +294,18 @@ function Resolve-RunSetting {
     [string[]]$includeTags = @(ConvertTo-TagList -Name 'IncludeTags' -Value $values['IncludeTags'])
     [string[]]$excludeTags = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $values['ExcludeTags'])
 
+    # The parsed value is passed on, rewritten in the documented form, so an
+    # offset given as +5:30 or +0530 reaches Hayabusa as +05:30.
+    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
     $timelineStart = $null
     $timelineEnd = $null
     if ($null -ne $values['TimelineStart']) {
         $start = ConvertTo-TimelineBound -Name 'TimelineStart' -Value ([string]$values['TimelineStart'])
-        $timelineStart = ([string]$values['TimelineStart']).Trim()
+        $timelineStart = $start.ToString($script:TimelineFormat, $invariant)
     }
     if ($null -ne $values['TimelineEnd']) {
         $end = ConvertTo-TimelineBound -Name 'TimelineEnd' -Value ([string]$values['TimelineEnd'])
-        $timelineEnd = ([string]$values['TimelineEnd']).Trim()
+        $timelineEnd = $end.ToString($script:TimelineFormat, $invariant)
     }
     if ($null -ne $timelineStart -and $null -ne $timelineEnd -and $start -ge $end) {
         throw "TimelineStart ($timelineStart) must be earlier than TimelineEnd ($timelineEnd)."
