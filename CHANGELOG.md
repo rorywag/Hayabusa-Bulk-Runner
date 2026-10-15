@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A Completed host whose timeline CSV the rollup can't read is now shown as Unreadable, with a red badge, in the dashboard and `triage_hosts.csv`, and is listed after the Failed hosts. It used to show a green Completed badge with blank counts and sort among the clean hosts. The manifest keeps the status the run recorded.
 - `TimelineStart` and `TimelineEnd` reach Hayabusa in the documented `yyyy-MM-dd HH:mm:ss +00:00` form. An offset written as `+5:30` or `+0530` was accepted by the check but passed on as typed. It's now passed on as `+05:30`, the value that was checked.
 - The dashboard only removes OutputRoot from a note where it starts a path. It used to remove it anywhere, so an OutputRoot of `D:\` turned "failed: disk" into "faile disk".
+- The compatibility self-test now checks each filter is applied, not just accepted. Two runs are added, `-e critical` and `--include-tag` with a tag the sample's rule doesn't carry, and they and the `--exclude-tag` run fail if the sample is still detected. The `--exclude-tag` run used to pass either way, and nothing checked `-e` or `--include-tag`, so a release that accepted a filter but ignored it passed.
 
 ## [0.8.0] - 2026-10-15
 

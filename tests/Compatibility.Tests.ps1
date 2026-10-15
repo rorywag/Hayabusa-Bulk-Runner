@@ -95,9 +95,15 @@ Describe 'Run plan and flag coverage' {
         $base[$base.IndexOf('--timeline-start') + 1] | Should -Be '2026-01-01 00:00:00 +00:00'
         $base[$base.IndexOf('--timeline-end') + 1] | Should -Be '2026-12-31 23:59:59 +00:00'
     }
-    It 'expects the sample detected except where --exclude-tag drops it' {
-        foreach ($r in $plan) { $r.ExpectDetection | Should -Be ($r.Name -ne 'exclude-tag') }
+    It 'expects the sample detected except in the runs whose filter should drop it' {
+        $dropping = @('exact-level', 'include-other', 'exclude-tag')
+        foreach ($r in $plan) {
+            $r.ExpectDetection | Should -Be ($dropping -notcontains $r.Name)
+            if ($dropping -contains $r.Name) { $r.Filter | Should -Not -BeNullOrEmpty }
+        }
         $planArgs['exclude-tag'] | Should -Contain '--exclude-tag'
+        ($planArgs['exact-level'] -join ' ') | Should -BeLike '*-e critical*'
+        ($planArgs['include-other'] -join ' ') | Should -BeLike '*--include-tag attack.impact*'
     }
     It 'fails coverage naming a flag that was never sent' {
         $c = Test-CompatibilityFlagCoverage -SentFlag @('-d', '-m') -EmittableFlag @('-d', '-m', '--threads')
@@ -143,6 +149,13 @@ Describe 'Run verdicts' {
         $c = @(Test-CompatibilityRun -Name 'baseline' -ExitCode 0 -CsvPath $emptyCsv -LogPath $okLog -Flag $flags -ExpectDetection $true)
         $c[0].Passed | Should -BeFalse
         $c[0].Detail | Should -BeLike "*'Log Cleared' detection did not fire*"
+    }
+    It 'fails a run that should have detected nothing but still detected the sample' {
+        $c = @(Test-CompatibilityRun -Name 'exclude-tag' -ExitCode 0 -CsvPath $rowsCsv -LogPath $okLog -Flag $flags -ExpectDetection $false -Filter '--exclude-tag attack.defense-evasion')
+        $c[0].Passed | Should -BeFalse
+        $c[0].Detail | Should -Be 'accepted, but the sample was still detected (1 detection(s)), so --exclude-tag attack.defense-evasion was not applied. Flags sent: dfir-timeline -d -m'
+        $c = @(Test-CompatibilityRun -Name 'exclude-tag' -ExitCode 0 -CsvPath $emptyCsv -LogPath $okLog -Flag $flags -ExpectDetection $false -Filter '--exclude-tag attack.defense-evasion')
+        $c[0].Passed | Should -BeTrue
     }
     It 'fails exit 0 with no CSV at all' {
         $c = @(Test-CompatibilityRun -Name 'x' -ExitCode 0 -CsvPath (Join-TestPath $vd 'missing.csv') -LogPath $okLog -Flag $flags)
@@ -259,11 +272,14 @@ Describe 'The whole check with the fake Hayabusa' {
     }
     BeforeEach { Mock Assert-HayabusaHost { } }
 
-    It 'passes and exits 0 when every run is accepted with the needed columns and levels' {
-        $r = Invoke-FakeCheck 'pass' "EXIT=0`nCSV=r.csv" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
+    It 'passes and exits 0 when every run is accepted, filtered, and has the needed columns and levels' {
+        $r = Invoke-FakeCheck 'pass' "EXIT=0`nCSV=r.csv`nSAMPLE_LEVEL=high`nSAMPLE_TAGS=attack.defense-evasion,attack.t1070.001" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
         @($r.Checks | Where-Object { -not $_.Passed } | ForEach-Object { "$($_.Name): $($_.Detail)" }) | Should -BeNullOrEmpty
         $r.ExitCode | Should -Be 0
-        @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exclude-tag', 'columns exclude-tag', 'levels')
+        @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag', 'levels')
+        foreach ($n in 'run exact-level', 'run include-other', 'run exclude-tag') {
+            (Get-Check $r.Checks $n).Detail | Should -BeLike 'accepted, no detections (empty CSV)*'
+        }
         $r.Version.Version | Should -Be $FakeVersionLine
         Test-Path -LiteralPath (Join-TestPath $r.Work 'sample' 'Security.evtx') | Should -BeTrue
     }
@@ -276,10 +292,28 @@ Describe 'The whole check with the fake Hayabusa' {
             Get-Content -LiteralPath (Join-TestPath $dir "$($run.Name)_hayabusa.log") | Should -Contain 'Exit code: 0'
         }
     }
+    It 'fails each run whose filter is accepted but not applied' {
+        $r = Invoke-FakeCheck 'ignored' "EXIT=0`nCSV=r.csv" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
+        $r.ExitCode | Should -Be 1
+        (Get-Check $r.Checks 'run baseline').Passed | Should -BeTrue
+        (Get-Check $r.Checks 'run exact-tag').Passed | Should -BeTrue
+        $expected = @{ 'exact-level' = '-e critical'; 'include-other' = '--include-tag attack.impact'; 'exclude-tag' = '--exclude-tag attack.defense-evasion' }
+        foreach ($name in $expected.Keys) {
+            $c = Get-Check $r.Checks "run $name"
+            $c.Passed | Should -BeFalse -Because "$name still detected the sample"
+            $c.Detail | Should -BeLike "accepted, but the sample was still detected (1 detection(s)), so $($expected[$name]) was not applied.*"
+        }
+    }
+    It 'fails when a filter drops the sample from a run that should detect it' {
+        $r = Invoke-FakeCheck 'overfilter' "EXIT=0`nCSV=r.csv`nSAMPLE_LEVEL=high`nSAMPLE_TAGS=attack.t1070.001" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
+        $r.ExitCode | Should -Be 1
+        (Get-Check $r.Checks 'run baseline').Passed | Should -BeTrue
+        (Get-Check $r.Checks 'run exact-tag').Detail | Should -BeLike "accepted, but the sample's 'Log Cleared' detection did not fire*"
+    }
     It 'fails and exits 1 naming a rejected flag, with no detections to read levels from' {
         $r = Invoke-FakeCheck 'reject' "EXIT=2`nCSV=none`nSTDERR=error: unexpected argument '--include-tag' found" @{}
         $r.ExitCode | Should -Be 1
-        foreach ($n in 'run baseline', 'run exact-tag', 'run exclude-tag') {
+        foreach ($n in 'run baseline', 'run exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag') {
             $c = Get-Check $r.Checks $n
             $c.Passed | Should -BeFalse
             $c.Detail | Should -BeLike '*Hayabusa rejected the flag --include-tag*'

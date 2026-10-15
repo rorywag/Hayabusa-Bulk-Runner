@@ -7,7 +7,7 @@
 .DESCRIPTION
     Builds a one-event Security log in a temporary folder, then runs the
     given Hayabusa over it with the exact arguments the tool uses for real
-    runs, built by the same New-HayabusaArgument. Three runs between them
+    runs, built by the same New-HayabusaArgument. Five runs between them
     send every flag the tool can pass: the flags every run sends, -m, -e,
     --include-tag, --exclude-tag, --timeline-start, --timeline-end and
     --threads, with both output profiles.
@@ -16,8 +16,9 @@
 
     - version: the version line is read from hayabusa help
     - flag coverage: every flag the tool can emit was sent at least once
-    - run: Hayabusa accepted dfir-timeline and every flag. A non-zero exit
-      names the flag, subcommand or value it refused, from its stderr
+    - run: Hayabusa accepted dfir-timeline and every flag, and applied the
+      filters. A non-zero exit names the flag, subcommand or value it
+      refused, from its stderr
     - columns: the CSV has Level, Computer and RuleTitle, which the rollup
       reads
     - levels: every Level value maps to emergency, critical, high, medium,
@@ -25,9 +26,10 @@
 
     The sample event is Security 1102, which Hayabusa's own "Log Cleared"
     rule detects at level high. A detection is needed because Hayabusa
-    writes an empty CSV, with no header row, when it detects nothing. The
-    --exclude-tag run drops that detection, so it is the clean
-    zero-detection run, and passes on an empty CSV.
+    writes an empty CSV, with no header row, when it detects nothing. Three
+    runs must drop that detection: -e critical, --include-tag with a tag the
+    rule lacks, and --exclude-tag with its tag. Each passes only on an empty
+    CSV, so a release that accepts a filter but ignores it fails.
 
     Exits 0 when every check passes and 1 otherwise. Each run's CSV, report
     and log are kept with -KeepArtifacts. Needs Windows, but not an
