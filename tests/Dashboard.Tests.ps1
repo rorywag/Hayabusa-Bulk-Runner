@@ -46,6 +46,19 @@ Describe 'Encoders' {
     }
 }
 
+Describe 'Paths in notes' {
+    It 'strips OutputRoot <Root> only where it starts a path' -ForEach @(
+        @{ Root = 'D:\'; Text = 'Hayabusa failed: disk full. See D:\H1\H1_hayabusa.log'; Expected = 'Hayabusa failed: disk full. See H1\H1_hayabusa.log' }
+        @{ Root = 'D:'; Text = 'Resolve: could not read D:\H1\x.vhdx'; Expected = 'Resolve: could not read H1\x.vhdx' }
+        @{ Root = 'D:\Case\Out'; Text = 'See d:\case\out\H1\H1_hayabusa.log'; Expected = 'See H1\H1_hayabusa.log' }
+        @{ Root = 'D:\Case\Out\'; Text = 'Left D:\Case\Outer\H1 and E:\D:\Case\Out\H1'; Expected = 'Left D:\Case\Outer\H1 and E:\D:\Case\Out\H1' }
+        @{ Root = '/cases/out'; Text = 'missing column(s) RuleTitle: /cases/out/H1/H1_timeline.csv'; Expected = 'missing column(s) RuleTitle: H1/H1_timeline.csv' }
+        @{ Root = '/'; Text = 'failed: /H1/H1_timeline.csv'; Expected = 'failed: /H1/H1_timeline.csv' }
+    ) {
+        ConvertTo-RelativeNote -Text $Text -OutputRoot $Root | Should -BeExactly $Expected
+    }
+}
+
 Describe 'Layout and content' {
     It 'puts the summary first, then rules, hosts and provenance' {
         $iSum = $html.IndexOf('Top emergency, critical and high rules')

@@ -171,7 +171,9 @@ function ConvertTo-CountCell {
 
 function ConvertTo-RelativeNote {
     # Shows paths under OutputRoot relative to it, so a shared dashboard
-    # does not carry the case's full folder layout in its notes.
+    # does not carry the case's full folder layout in its notes. OutputRoot
+    # is only removed where it starts a path and ends at a separator, so a
+    # drive root such as D:\ can't match the "d:" inside "failed: disk".
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -187,7 +189,10 @@ function ConvertTo-RelativeNote {
         return $Text
     }
     $root = $OutputRoot.TrimEnd('\', '/')
-    $pattern = [regex]::Escape($root) + '[\\/]?'
+    if ($root.Length -eq 0) {
+        return $Text
+    }
+    $pattern = '(?<![\w.$~\\/:-])' + [regex]::Escape($root) + '[\\/]+'
     return [regex]::Replace($Text, $pattern, '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 }
 
