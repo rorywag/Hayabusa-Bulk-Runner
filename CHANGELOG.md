@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- The compatibility watcher no longer runs the downloaded Hayabusa binary anywhere a token can write. The job that unpacks and runs it has a read-only token, held only by the steps that call `gh` before anything is unpacked. The issue is filed by a separate job on a fresh runner.
+
+### Fixed
+
+- A config that sets `RulesPath` to an empty value is refused at load. It used to fall back to the config file's own folder, so every host ran against the wrong rules with no warning.
+- A host's log from an earlier run is removed as soon as the host is run again. A rerun that failed before Hayabusa started, for example an image that wouldn't mount or a ZIP over a limit, used to leave the earlier log, with its results summary, linked from the new Failed row.
+
 ## [0.8.0] - 2026-10-15
 
 ### Added

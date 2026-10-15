@@ -117,7 +117,9 @@ Describe 'triage_hosts.csv' {
 Describe 'A Failed row with files left from an earlier run' {
     BeforeAll {
         # A rerun that failed while its input was prepared, before Hayabusa
-        # ran, so the previous run's timeline, report and log are still there.
+        # ran, so the previous run's timeline and report are still there. The
+        # batch removes the old log, but the rollup links any log it finds,
+        # such as a ZIP refusal log.
         $script:fo = New-TestDirectory (Join-TestPath $TestDrive 'failed-leftover')
         $fm = Join-TestPath $fo 'run_manifest.csv'
         Initialize-RunManifest -Path $fm | Out-Null

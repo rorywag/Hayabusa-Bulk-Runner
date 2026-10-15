@@ -1,6 +1,33 @@
 # Rows in these states are not run again unless -Force is given.
 $script:FinishedStatuses = @('Completed', 'CompletedWithErrors')
 
+function Remove-PreviousHostLog {
+    <#
+    .SYNOPSIS
+        Removes a collection's log from an earlier run when it is run again.
+    .DESCRIPTION
+        Runs before anything else for the collection. A rerun that fails
+        before Hayabusa starts, for example an image that won't mount or a
+        ZIP over a limit, then can't leave the earlier run's log, with its
+        results summary, linked from the new Failed row. The run writes its
+        own log when Hayabusa runs, or when a ZIP is refused.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Path
+    )
+
+    if ((Test-Path -LiteralPath $Path.Log -PathType Leaf) -and $PSCmdlet.ShouldProcess($Path.Log, 'Remove the previous run''s log')) {
+        try {
+            [System.IO.File]::Delete($Path.Log)
+        }
+        catch {
+            throw "Could not remove the previous run's $([System.IO.Path]::GetFileName($Path.Log)): $($_.Exception.Message)"
+        }
+    }
+}
+
 function Remove-PreviousHostOutput {
     <#
     .SYNOPSIS
@@ -10,7 +37,7 @@ function Remove-PreviousHostOutput {
         Without this, a rerun where Hayabusa writes nothing would be counted
         from the previous run's CSV and linked to its report. Only the two
         files Hayabusa writes are removed, from the collection's own output
-        folder. The log is rewritten by the run itself.
+        folder. The log is removed earlier, by Remove-PreviousHostLog.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -106,6 +133,10 @@ function Invoke-CollectionRun {
     $status = 'Failed'
 
     try {
+        # First, so however this run fails, the row can't link an earlier
+        # run's log.
+        Remove-PreviousHostLog -Path $paths
+
         # Checked before resolving, so a ZIP is not extracted for nothing.
         Assert-HayabusaHost
 

@@ -5,6 +5,11 @@ name: Hayabusa compatibility
 # against that release and files an issue with the result. It never writes
 # to the repo: adopting a new release is a normal pull request. This is a
 # watcher, not a pull request check.
+#
+# The downloaded Hayabusa binary is untrusted, so it never runs next to a
+# token that can write. The check job holds a read-only token, and only in
+# the steps that call gh before the binary is unpacked. The issue is filed by
+# a separate report job on a fresh runner, which runs nothing it downloaded.
 
 on:
   workflow_dispatch:
@@ -13,7 +18,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: hayabusa-compat
@@ -24,12 +28,21 @@ jobs:
     name: check latest Hayabusa
     runs-on: windows-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     defaults:
       run:
         shell: pwsh
     env:
-      GH_TOKEN: ${{ github.token }}
       UPSTREAM: Yamato-Security/hayabusa
+    outputs:
+      current: ${{ steps.version.outputs.current }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      tested: ${{ steps.version.outputs.tested }}
+      asset: ${{ steps.version.outputs.asset }}
+      selftest-exit: ${{ steps.selftest.outputs.exit }}
+      selftest-log: ${{ steps.selftest.outputs.log }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +51,8 @@ jobs:
       # A failed API call fails the job, so the failed run is the signal.
       - name: Compare the latest release with the tested version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $json = gh release view --repo $env:UPSTREAM --json 'tagName,assets'
@@ -79,18 +94,19 @@ jobs:
           "tested=$tested" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
 
-      # A failed download or a package without a binary fails the job.
-      - name: Download and unpack the release
-        id: unpack
+      # A failed download fails the job. This step only downloads: nothing
+      # from the package runs while it holds the token.
+      - name: Download the release
+        id: download
         if: steps.version.outputs.current == 'false'
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           ASSET: ${{ steps.version.outputs.asset }}
         run: |
           $ErrorActionPreference = 'Stop'
           $download = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'hayabusa-download'
-          $extract = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'hayabusa'
-          New-Item -ItemType Directory -Path $download, $extract -Force | Out-Null
+          New-Item -ItemType Directory -Path $download -Force | Out-Null
 
           gh release download $env:TAG --repo $env:UPSTREAM --pattern $env:ASSET --dir $download --clobber
           if ($LASTEXITCODE -ne 0) {
@@ -100,7 +116,21 @@ jobs:
           if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
               throw "$env:ASSET was not downloaded."
           }
-          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+
+      # No token from here on in this job. A package without a binary, or
+      # without rules that update-rules can fetch, fails the job.
+      - name: Unpack the release
+        id: unpack
+        if: steps.version.outputs.current == 'false'
+        env:
+          ZIP: ${{ steps.download.outputs.zip }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extract = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'hayabusa'
+          New-Item -ItemType Directory -Path $extract -Force | Out-Null
+          Expand-Archive -LiteralPath $env:ZIP -DestinationPath $extract -Force
 
           $exes = @(Get-ChildItem -LiteralPath $extract -Recurse -File -Filter 'hayabusa*.exe')
           if ($exes.Count -ne 1) {
@@ -139,29 +169,52 @@ jobs:
           HAYABUSA_RULES: ${{ steps.unpack.outputs.rules }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $log = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'selftest.txt'
           $lines = & {
               $ErrorActionPreference = 'Continue'
               & pwsh -NoProfile -NonInteractive -File ./Test-HayabusaCompatibility.ps1 -HayabusaPath $env:HAYABUSA_EXE -RulesPath $env:HAYABUSA_RULES 2>&1 | ForEach-Object { [string]$_ }
           }
           $code = $LASTEXITCODE
           $text = (@($lines) -join "`n") -replace "\x1b\[[0-9;]*[A-Za-z]", ''
-          [System.IO.File]::WriteAllText($log, $text)
           $text
           "Self-test exit code: $code"
+
+          # The output goes to the report job as a job output. An issue body
+          # holds at most 65536 characters, so long output keeps its end,
+          # where the summary is.
+          $limit = 60000
+          if ($text.Length -gt $limit) {
+              $text = "[first $($text.Length - $limit) characters cut, the full output is in the run log]`n" + $text.Substring($text.Length - $limit)
+          }
+          $delimiter = 'SELFTEST_' + [guid]::NewGuid().ToString('N')
           "exit=$code" >> $env:GITHUB_OUTPUT
-          "log=$log" >> $env:GITHUB_OUTPUT
+          "log<<$delimiter" >> $env:GITHUB_OUTPUT
+          $text >> $env:GITHUB_OUTPUT
+          $delimiter >> $env:GITHUB_OUTPUT
           exit 0
 
+  # A fresh runner that never sees the downloaded package. It only runs gh,
+  # with the one token in the workflow that can write, and only to issues.
+  report:
+    name: file the result
+    needs: check
+    if: needs.check.outputs.current == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
       - name: File the result as an issue
-        if: steps.version.outputs.current == 'false'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-          TESTED: ${{ steps.version.outputs.tested }}
-          ASSET: ${{ steps.version.outputs.asset }}
-          SELFTEST_EXIT: ${{ steps.selftest.outputs.exit }}
-          SELFTEST_LOG: ${{ steps.selftest.outputs.log }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          TAG: ${{ needs.check.outputs.tag }}
+          TESTED: ${{ needs.check.outputs.tested }}
+          ASSET: ${{ needs.check.outputs.asset }}
+          SELFTEST_EXIT: ${{ needs.check.outputs.selftest-exit }}
+          SELFTEST_OUTPUT: ${{ needs.check.outputs.selftest-log }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -175,12 +228,10 @@ jobs:
               $title = "Hayabusa $env:VERSION FAILS compatibility check"
           }
 
-          # An issue body holds at most 65536 characters. Long output keeps
-          # its end, where the summary is.
-          $output = [System.IO.File]::ReadAllText($env:SELFTEST_LOG)
-          $limit = 60000
-          if ($output.Length -gt $limit) {
-              $output = "[first $($output.Length - $limit) characters cut, the full output is in the run log]`n" + $output.Substring($output.Length - $limit)
+          # Cut to fit an issue body by the check job.
+          $output = [string]$env:SELFTEST_OUTPUT
+          if ([string]::IsNullOrWhiteSpace($output) -or [string]::IsNullOrWhiteSpace($env:SELFTEST_EXIT)) {
+              throw 'The check job passed no self-test result.'
           }
           $fence = '````'
 
