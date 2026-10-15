@@ -28,7 +28,7 @@ The console during the same run:
 
 ## Status
 
-Pre-release. It's been run against real Hayabusa 4.1.0 and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Two behaviours still need the right evidence to confirm, listed under [Not yet confirmed on Windows](docs/USAGE.md#not-yet-confirmed-on-windows). Check that list before relying on one of them in a report.
+Released. It's early days, so bugs may surface. It's been run against real Hayabusa 4.1.0 and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Two behaviours still need the right evidence to confirm, listed under [Not yet confirmed on Windows](docs/USAGE.md#not-yet-confirmed-on-windows). Check that list before relying on one of them in a report.
 
 ## Requirements
 
