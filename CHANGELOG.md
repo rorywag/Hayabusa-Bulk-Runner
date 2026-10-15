@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `TimelineStart` and `TimelineEnd` reach Hayabusa in the documented `yyyy-MM-dd HH:mm:ss +00:00` form. An offset written as `+5:30` or `+0530` was accepted by the check but passed on as typed. It's now passed on as `+05:30`, the value that was checked.
 - The dashboard only removes OutputRoot from a note where it starts a path. It used to remove it anywhere, so an OutputRoot of `D:\` turned "failed: disk" into "faile disk".
 - The compatibility self-test now checks each filter is applied, not just accepted. Two runs are added, `-e critical` and `--include-tag` with a tag the sample's rule doesn't carry, and they and the `--exclude-tag` run fail if the sample is still detected. The `--exclude-tag` run used to pass either way, and nothing checked `-e` or `--include-tag`, so a release that accepted a filter but ignored it passed.
+- The compatibility watcher files one issue per release and stays quiet until something changes. When the result flips it comments and retitles the issue to the new result, so the next run matches it instead of commenting again every week. Closed issues count too, so a release closed without adopting it isn't filed again. A FAIL whose failing checks change gets a comment naming the new ones, where it used to say nothing.
 
 ## [0.8.0] - 2026-10-15
 

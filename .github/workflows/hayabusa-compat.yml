@@ -10,6 +10,10 @@ name: Hayabusa compatibility
 # token that can write. The check job holds a read-only token, and only in
 # the steps that call gh before the binary is unpacked. The issue is filed by
 # a separate report job on a fresh runner, which runs nothing it downloaded.
+#
+# There is one issue per release, open or closed. A later run comments on it
+# only when the result flips, retitling it to match, or when a FAIL's failing
+# checks change. Closing an issue keeps that release from being filed again.
 
 on:
   workflow_dispatch:
@@ -235,6 +239,15 @@ jobs:
           }
           $fence = '````'
 
+          # The failing checks stand for a FAIL's reason. Their details carry
+          # temp paths that change every run, so only the names are compared.
+          $failing = ''
+          if (-not $passed) {
+              $names = @($output -split "`r?`n" | ForEach-Object { if ($_ -match '^FAIL  (\S+(?: \S+)*)  ') { $Matches[1] } } | Sort-Object -Unique)
+              $failing = "exit code $env:SELFTEST_EXIT; $($names -join ', ')"
+          }
+          $marker = "<!-- failing-checks: $failing -->"
+
           $body = New-Object System.Collections.Generic.List[string]
           $body.Add(('Detected version: Hayabusa {0}, release `{1}`, package `{2}`. The tested version is {3}.' -f $env:VERSION, $env:TAG, $env:ASSET, $env:TESTED))
           $body.Add('')
@@ -263,6 +276,8 @@ jobs:
               $body.Add($fence)
               $body.Add($output)
               $body.Add($fence)
+              $body.Add('')
+              $body.Add($marker)
           }
           $body.Add('')
           $body.Add("Run: $env:RUN_URL")
@@ -274,25 +289,48 @@ jobs:
               throw "Could not create or update the $label label (gh exit code $LASTEXITCODE)."
           }
 
-          $json = gh issue list --repo $env:REPO --label $label --state open --limit 200 --json 'number,title'
+          # Closed issues count too, so a release closed without adopting it
+          # is not filed again every week.
+          $json = gh issue list --repo $env:REPO --label $label --state all --limit 200 --json 'number,title'
           if ($LASTEXITCODE -ne 0) {
-              throw "Could not list open $label issues (gh exit code $LASTEXITCODE)."
+              throw "Could not list $label issues (gh exit code $LASTEXITCODE)."
           }
           $pattern = '^Hayabusa ' + [regex]::Escape($env:VERSION) + ' (passes|FAILS) compatibility check$'
-          $existing = @(($json -join "`n") | ConvertFrom-Json | Where-Object { $_.title -match $pattern })
+          $existing = @(($json -join "`n") | ConvertFrom-Json | Where-Object { $_.title -match $pattern } | Sort-Object -Property number -Descending)
 
-          $same = @($existing | Where-Object { $_.title -ceq $title })
-          if ($same.Count -gt 0) {
-              "Issue #$($same[0].number) already reports this result for Hayabusa $env:VERSION. Nothing filed."
-              exit 0
-          }
           if ($existing.Count -gt 0) {
-              # The result changed since the open issue was filed.
-              gh issue comment $existing[0].number --repo $env:REPO --body-file $bodyFile
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Could not comment on issue #$($existing[0].number) (gh exit code $LASTEXITCODE)."
+              $issue = $existing[0]
+              if ($issue.title -ceq $title) {
+                  if ($passed) {
+                      "Issue #$($issue.number) already reports this result for Hayabusa $env:VERSION. Nothing filed."
+                      exit 0
+                  }
+                  # Still failing: report again only if the failing checks changed.
+                  $view = gh issue view $issue.number --repo $env:REPO --json 'body,comments'
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Could not read issue #$($issue.number) (gh exit code $LASTEXITCODE)."
+                  }
+                  $thread = ($view -join "`n") | ConvertFrom-Json
+                  $texts = @([string]$thread.body) + @($thread.comments | ForEach-Object { [string]$_.body })
+                  $last = @($texts | ForEach-Object { [regex]::Matches($_, '<!-- failing-checks: .*? -->') | ForEach-Object { $_.Value } }) | Select-Object -Last 1
+                  if ($last -ceq $marker) {
+                      "Issue #$($issue.number) already reports these failing checks for Hayabusa $env:VERSION. Nothing filed."
+                      exit 0
+                  }
               }
-              "Commented the new result on issue #$($existing[0].number)."
+              # The result or the failing checks changed. The title is kept to
+              # the latest result so the next run matches it.
+              gh issue comment $issue.number --repo $env:REPO --body-file $bodyFile
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Could not comment on issue #$($issue.number) (gh exit code $LASTEXITCODE)."
+              }
+              if ($issue.title -cne $title) {
+                  gh issue edit $issue.number --repo $env:REPO --title $title
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Could not retitle issue #$($issue.number) (gh exit code $LASTEXITCODE)."
+                  }
+              }
+              "Commented the new result on issue #$($issue.number)."
               exit 0
           }
 
