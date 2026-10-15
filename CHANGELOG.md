@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- The compatibility watcher no longer runs the downloaded Hayabusa binary anywhere a token can write. The job that unpacks and runs it has a read-only token, held only by the steps that call `gh` before anything is unpacked. The issue is filed by a separate job on a fresh runner.
+
 ## [0.8.0] - 2026-10-15
 
 ### Added
