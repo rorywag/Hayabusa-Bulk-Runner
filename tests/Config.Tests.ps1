@@ -77,6 +77,9 @@ Describe 'Engagement config' {
         @{ Key = 'ExactLevel'; Label = 'null'; Body = '@{ ExactLevel = $null }' }
         @{ Key = 'MinLevel'; Label = 'an empty string'; Body = "@{ MinLevel = '' }" }
         @{ Key = 'ExactLevel'; Label = 'blank'; Body = "@{ ExactLevel = ' ' }" }
+        @{ Key = 'RulesPath'; Label = 'null'; Body = '@{ RulesPath = $null }' }
+        @{ Key = 'RulesPath'; Label = 'an empty string'; Body = "@{ RulesPath = '' }" }
+        @{ Key = 'RulesPath'; Label = 'blank'; Body = "@{ RulesPath = ' ' }" }
     ) {
         $m = Get-ThrownMessage { Resolve-With $Body }
         $m | Should -BeLike "*sets $Key to an empty value*"

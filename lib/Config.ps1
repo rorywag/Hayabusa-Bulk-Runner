@@ -224,6 +224,11 @@ function Resolve-RunSetting {
             throw "Config file $($Config.Path) sets $key to an empty value. Set it to a level such as 'high', or remove the line."
         }
     }
+    # An empty RulesPath would otherwise resolve to the config file's own
+    # folder and run every host against the wrong rules without a word.
+    if ($configValues.ContainsKey('RulesPath') -and [string]::IsNullOrWhiteSpace([string]$configValues['RulesPath'])) {
+        throw "Config file $($Config.Path) sets RulesPath to an empty value. Set it to the rules folder, or remove the line to use the rules folder beside hayabusa.exe."
+    }
     $configInclude = @(ConvertTo-TagList -Name 'IncludeTags' -Value $configValues['IncludeTags'])
     $configExclude = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $configValues['ExcludeTags'])
     if ($configInclude.Count -gt 0 -and $configExclude.Count -gt 0) {
