@@ -87,8 +87,9 @@ function Get-SeverityLevelNotice {
     .DESCRIPTION
         No rule Hayabusa ships is level emergency, so a floor or exact
         level of emergency loads no rules unless they have been raised with
-        level-tuning. That can be deliberate, so this warns rather than
-        refuses. Critical and below return nothing.
+        level-tuning. Hayabusa then stops with "No rules were loaded" and
+        exits 1, so every host fails. Raised rules can be deliberate, so
+        this warns rather than refuses. Critical and below return nothing.
     #>
     [CmdletBinding()]
     [OutputType([string])]

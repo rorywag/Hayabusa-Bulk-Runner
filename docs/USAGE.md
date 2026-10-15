@@ -180,7 +180,7 @@ Settings that should stay the same for a whole engagement go in a `.psd1` file p
 
 `ExactLevel` sets a single level instead of a floor, for example only critical. MinLevel and ExactLevel are mutually exclusive: a config that sets both is refused, and `-MinLevel` on the command line replaces a config's ExactLevel.
 
-No rule Hayabusa ships is emergency level. Emergency only appears when level-tuning raises a rule to it, so a `MinLevel` or `ExactLevel` of emergency matches nothing unless your rules have been raised that way. The tool warns at startup when either is set to emergency, and the run carries on. When reading results, both `emer` and `emergency` are accepted as the emergency level.
+No rule Hayabusa ships is emergency level. Emergency only appears when level-tuning raises a rule to it, so a `MinLevel` or `ExactLevel` of emergency loads no rules unless your rules have been raised that way. With no rules loaded, Hayabusa stops with "No rules were loaded" and exits 1, so every host is marked Failed. The tool warns at startup when either is set to emergency, then runs as asked, since your rules may have been raised. When reading results, both `emer` and `emergency` are accepted as the emergency level.
 
 `Profile` takes `standard`, the default, or `verbose`. Verbose adds more detail per event to each host's timeline CSV: MITRE tactics and tags, other tags, and the rule and EVTX file names. The tool's counts and rollup only read Level, Computer and RuleTitle, which both profiles include, so the profile changes the per-host detail and never the rollup. Hayabusa's other profiles aren't accepted. The Timesketch ones, for example, rename RuleTitle to `message`, which the rollup can't read.
 

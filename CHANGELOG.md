@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The compatibility self-test now checks each filter is applied, not just accepted. Two runs are added, `-e critical` and `--include-tag` with a tag the sample's rule doesn't carry, and they and the `--exclude-tag` run fail if the sample is still detected. The `--exclude-tag` run used to pass either way, and nothing checked `-e` or `--include-tag`, so a release that accepted a filter but ignored it passed.
 - The compatibility watcher files one issue per release and stays quiet until something changes. When the result flips it comments and retitles the issue to the new result, so the next run matches it instead of commenting again every week. Closed issues count too, so a release closed without adopting it isn't filed again. A FAIL whose failing checks change gets a comment naming the new ones, where it used to say nothing.
 - Timestamps in the manifest, run-meta, logs, the dashboard and file names are written the same way whatever the Windows region settings. A locale with a different time separator used to write times like `10.20.30`, and one with another calendar, such as Thai, a different year.
+- USAGE and the 0.7.0 notes said a `MinLevel` or `ExactLevel` of emergency, with the standard rules, matches nothing and the run carries on. Hayabusa loads no rules, stops with "No rules were loaded" and exits 1, so every host fails, as the startup notice says. They now say that.
 
 ## [0.8.0] - 2026-10-15
 
@@ -46,7 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - README trimmed to a scannable front page. The full reference moved to `docs/USAGE.md`.
 - Dashboard section "Provenance" renamed to "Run details".
 - The default severity floor is now medium instead of high.
-- A run whose severity level resolves to emergency now warns at startup that no shipped Hayabusa rule is emergency, so the run matches nothing without level-tuning.
+- A run whose severity level resolves to emergency now warns at startup that no shipped Hayabusa rule is emergency, so without level-tuning no rules load and every host fails.
 
 ## [0.6.3] - 2026-10-13
 
