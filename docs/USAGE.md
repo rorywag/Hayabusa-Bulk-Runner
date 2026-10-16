@@ -16,7 +16,7 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 | Parameter | What it does |
 |---|---|
 | `-InputRoot` | Parent folder holding one entry per host |
-| `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot |
+| `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot, or hold it |
 | `-HayabusaPath` | Full path to `hayabusa.exe` |
 | `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default medium |
 | `-Threads` | Passed to Hayabusa. Leave it out to let Hayabusa decide |
@@ -120,6 +120,8 @@ The differencing disk is created with diskpart, which can't reliably read non-AS
 
 For how the mount keeps the evidence read-only, see [Evidence integrity](../README.md#evidence-integrity) in the README.
 
+Each disk image is hashed with SHA-256 before it's mounted and again after teardown, to show it wasn't changed. Each hash reads the whole image, so expect a pause before and after a large one: the run says how many images it will hash when it starts, and prints a line with the image's size before each one. A ZIP holding a disk image is hashed as the extracted image. Loose folders aren't hashed.
+
 ## Outputs
 
 Everything lands under OutputRoot:
@@ -130,7 +132,7 @@ Everything lands under OutputRoot:
 | `<Collection>\<Collection>_timeline.csv` | Hayabusa's CSV timeline, UTC |
 | `<Collection>\<Collection>_hayabusa.log` | The exact arguments, Hayabusa's output and its exit code |
 | `run_manifest.csv` | One row per collection with its latest status, counts, warnings and errors |
-| `_runs\run_meta_<time>_<RunId>.json` | What each run used: Hayabusa and rules versions, settings and where each came from, config hash, ZIP limits, collections, summary |
+| `_runs\run_meta_<time>_<RunId>.json` | What each run used: Hayabusa and rules versions, settings and where each came from, config hash, ZIP limits, collections, summary, and each disk image's SHA-256 before and after its host. See [Run-meta](#run-meta) |
 | `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
 | `triage_dashboard.html` | The dashboard |
@@ -154,6 +156,20 @@ Some folders under OutputRoot belong to the tool:
 | `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
 | `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
+### Run-meta
+
+Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts and completes it when it ends. Under `Collections` it lists every collection the run found, with these fields:
+
+| Field | What it holds |
+|---|---|
+| `Collection`, `Source`, `InputType` | The collection's name, its original name in InputRoot, and Loose, Zip, Vhd or Vhdx |
+| `ImagePath` | The disk image that was hashed and mounted. For a ZIP holding an image, the extracted image under `_work` |
+| `ImageSha256Before` | Its SHA-256 just before the differencing disk was created |
+| `ImageSha256After` | Its SHA-256 after the differencing disk was dismounted and deleted |
+| `ImageHashMatch` | `true` when the two match. `false` means the image changed during the run, and the host is Failed. Null when the second hash couldn't be taken, for example because the image couldn't be dismounted, which the host's Error says |
+
+The four image fields are null for a loose folder, a ZIP with no disk image, and a collection skipped because an earlier run already finished it. With `-KeepArtifacts` the differencing disk is kept, and the second hash is taken once it's dismounted.
+
 ## Rerunning and resuming
 
 The manifest is the record of what's been done. On a rerun, hosts that are Completed or CompletedWithErrors are skipped, and everything else is tried again: Failed, Pending, and anything left Running by a run that was interrupted. `-Force` reruns the lot. Rerunning a host removes its previous report and timeline just before Hayabusa runs, so what's recorded is always that run's own result. So after fixing a problem, say extracting a ZIP the tool couldn't, just run the same command again.
@@ -162,7 +178,7 @@ The manifest is the record of what's been done. On a rerun, hosts that are Compl
 |---|---|
 | Completed | Hayabusa exited cleanly and wrote a timeline. No detections is still Completed: Hayabusa writes an empty timeline when nothing matches |
 | CompletedWithErrors | Hayabusa exited non-zero but still wrote a timeline. Counts are kept and the exit code is in Error |
-| Failed | The input couldn't be prepared, Hayabusa wrote no timeline, the results couldn't be read, or teardown failed. Hayabusa can stop on an error and still exit 0 without writing a timeline, so that's Failed too, with Hayabusa's own error message in Error. After a teardown failure, the manifest keeps the counts from a finished Hayabusa run, but the dashboard and triage CSVs leave them out, as they do for every Failed host |
+| Failed | The input couldn't be prepared, Hayabusa wrote no timeline, the results couldn't be read, or teardown failed. Hayabusa can stop on an error and still exit 0 without writing a timeline, so that's Failed too, with Hayabusa's own error message in Error. A host whose disk image hashed differently after the run than before it is Failed whatever else happened, with an "Evidence integrity check failed" error first. After a teardown failure, the manifest keeps the counts from a finished Hayabusa run, but the dashboard and triage CSVs leave them out, as they do for every Failed host |
 | Pending | Found but not run yet |
 | Running | Being run, or the run was interrupted |
 

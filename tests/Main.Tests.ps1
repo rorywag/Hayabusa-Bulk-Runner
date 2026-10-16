@@ -52,6 +52,17 @@ Describe 'Checks before anything is written' {
         Get-ThrownMessage { & $MainScript -InputRoot $in -OutputRoot (Join-TestPath $in 'results') -HayabusaPath $hb } | Should -BeLike '*must not be inside InputRoot*'
         Test-Path -LiteralPath (Join-TestPath $in 'results') | Should -BeFalse
     }
+    It 'refuses an InputRoot inside OutputRoot, such as a kept _diff folder, leaving it untouched' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'case-out')
+        $kept = New-TestDirectory (Join-TestPath $o '_diff')
+        $image = Write-TestText -Path (Join-TestPath $kept 'HOST01.vhdx') -Line @('evidence')
+        $before = (Get-FileHash -LiteralPath $image).Hash
+        $m = Get-ThrownMessage { & $MainScript -InputRoot $kept -OutputRoot $o -HayabusaPath $hb }
+        $m | Should -BeLike "InputRoot ($kept) must not be inside OutputRoot ($o).*"
+        (Get-FileHash -LiteralPath $image).Hash | Should -Be $before
+        Test-Path -LiteralPath (Join-TestPath $o 'run_manifest.csv') | Should -BeFalse
+        Test-Path -LiteralPath (Join-TestPath $o '_runs') | Should -BeFalse
+    }
     It 'stops on a missing rules folder and writes nothing' {
         $tool2 = New-TestDirectory (Join-TestPath $TestDrive 'tool2')
         $hb2 = Write-TestText -Path (Join-TestPath $tool2 'hayabusa.exe') -Line @('x')
@@ -127,7 +138,7 @@ Describe 'A run' {
     }
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
-        $m1.SchemaVersion | Should -Be 6
+        $m1.SchemaVersion | Should -Be 7
         # Compared with $ToolVersion as the script sets it, so a release needs no test change.
         $toolVersion = [regex]::Match([System.IO.File]::ReadAllText($MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
         $toolVersion | Should -Match '^\d+\.\d+\.\d+$'
@@ -154,6 +165,16 @@ Describe 'A run' {
         $rows1[0].Source | Should -BeExactly 'HOST 02'
         $m1.Summary.Discovered | Should -Be 2
         @($m1.Collections).Count | Should -Be 2
+    }
+    It 'records no image hash for a loose collection, and no hashing notice' {
+        foreach ($c in @($m1.Collections)) {
+            $c.InputType | Should -Be 'Loose'
+            foreach ($f in 'ImagePath', 'ImageSha256Before', 'ImageSha256After', 'ImageHashMatch') {
+                $c.PSObject.Properties.Name | Should -Contain $f
+                $c.$f | Should -BeNullOrEmpty
+            }
+        }
+        @($info1 | Where-Object { $_ -like '*hashed with SHA-256*' }).Count | Should -Be 0
     }
     It 'builds the rollup and records it in run-meta' {
         Test-Path -LiteralPath (Join-TestPath $out 'triage_dashboard.html') | Should -BeTrue

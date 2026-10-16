@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Each disk image is hashed with SHA-256 just before its differencing disk is created and again after the differencing disk is dismounted and deleted. An image inside a ZIP is hashed as the extracted image that gets mounted. Both hashes and whether they match are recorded per host in run-meta, as `ImagePath`, `ImageSha256Before`, `ImageSha256After` and `ImageHashMatch` on each collection. Run-meta's SchemaVersion is now 7. If the hashes differ, the host is Failed with an "Evidence integrity check failed" error naming both, and the dashboard leads with a red notice. Each hash reads the whole image, so a large image adds a pause before and after its host, and the run says so at the start and before each hash. The README claimed this before-and-after hash, but only the integration tests took it.
+
 ### Fixed
 
+- InputRoot is refused if it's inside OutputRoot, as OutputRoot inside InputRoot already was. The tool creates and deletes files under OutputRoot, and with InputRoot pointed at OutputRoot's `_diff` folder, for example images kept there by `-KeepArtifacts`, an input image had the same path as the differencing disk the tool clears before mounting, and was deleted.
 - A host where Hayabusa exited 0 but wrote no CSV is now recorded as Failed, with Hayabusa's own error from stderr in Error, and is retried on the next run. It used to be recorded as Completed with no detections and a warning, and skipped on every rerun. Hayabusa does this when it stops on an error: for a `--timeline-start` it can't parse, 4.2.0 exits 0, writes no CSV, and prints the reason only on stderr. A run that matches nothing writes an empty CSV, which is still Completed with no detections. Hosts an earlier version already recorded this way stay Completed: find them by the warning "Hayabusa exited 0 but wrote no CSV" in `run_manifest.csv`, delete their rows and run again, or rerun everything with `-Force`.
 - The compatibility self-test's FAIL line for a run that exits 0 with no CSV now gives Hayabusa's error from stderr, so the watcher's issue says why the run failed. Its note that the tool records a missing CSV as a failed host was wrong before this fix and is now right.
 

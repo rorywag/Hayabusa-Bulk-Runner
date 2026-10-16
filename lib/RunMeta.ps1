@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 6
+$script:RunMetaSchemaVersion = 7
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -38,7 +38,9 @@ function New-RunMeta {
         Filled from the resolved settings, the collections discovered for
         this run, the version line from hayabusa help stored verbatim, and the
         rule set's newest file and count. CompletedUtc, Summary and Rollup
-        are set when the batch and rollup finish. Nothing is written to disk here.
+        are set when the batch and rollup finish, and each collection's
+        image hash fields by Set-RunMetaImageHash. Nothing is written to
+        disk here.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
     [CmdletBinding()]
@@ -129,11 +131,52 @@ function New-RunMeta {
         }
         Collections     = @($Collections | ForEach-Object {
                 [ordered]@{
-                    Collection = $_.Collection
-                    Source     = $_.Source
-                    InputType  = $_.InputType
+                    Collection        = $_.Collection
+                    Source            = $_.Source
+                    InputType         = $_.InputType
+                    ImagePath         = $null
+                    ImageSha256Before = $null
+                    ImageSha256After  = $null
+                    ImageHashMatch    = $null
                 }
             })
+    }
+}
+
+function Set-RunMetaImageHash {
+    <#
+    .SYNOPSIS
+        Fills in each collection's image hash fields from the batch.
+    .DESCRIPTION
+        ImageHash maps collection names to the hash records the batch
+        returned. A collection with a record gets the image that was hashed,
+        both SHA-256 values and whether they match. ImageHashMatch is null
+        when the second hash was not taken, for example because the image
+        could not be dismounted. Collections with no disk image, and those
+        skipped this run, keep null fields.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Changes an in-memory object only.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$RunMeta,
+
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$ImageHash
+    )
+
+    foreach ($entry in @($RunMeta['Collections'])) {
+        if (-not $ImageHash.Contains($entry['Collection'])) {
+            continue
+        }
+        $record = $ImageHash[$entry['Collection']]
+        if ($null -eq $record) {
+            continue
+        }
+        $entry['ImagePath'] = $record.ImagePath
+        $entry['ImageSha256Before'] = $record.Before
+        $entry['ImageSha256After'] = $record.After
+        $entry['ImageHashMatch'] = $record.Match
     }
 }
 

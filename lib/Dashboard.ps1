@@ -73,6 +73,7 @@ tr:last-child td { border-bottom: none; }
 .err { color: var(--crit); }
 .dim { color: var(--muted); }
 .warnbox { border-left: 4px solid var(--high); background: var(--high-bg); padding: 8px 12px; border-radius: 4px; margin: 10px 0; }
+.warnbox.evidence { border-left-color: var(--crit); background: var(--crit-bg); color: var(--crit); font-weight: 600; }
 a { color: var(--link); }
 .links a { margin-right: 8px; white-space: nowrap; }
 footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
@@ -293,6 +294,15 @@ function New-DashboardHtml {
     [void]$sb.AppendLine("<span><b>$(& $e $notRun)</b> not yet run</span>")
     [void]$sb.AppendLine("<span><b>$(& $e $unknown)</b> host name unknown</span>")
     [void]$sb.AppendLine('</div>')
+
+    # An image that hashed differently after the run than before it is the
+    # one thing that must never happen, so it heads the page as well as the
+    # host's notes.
+    $changed = @($hosts | Where-Object { ([string]$_.Error).Contains($script:EvidenceChangedPrefix) })
+    if ($changed.Count -gt 0) {
+        $names = @($changed | ForEach-Object { & $e $_.Collection }) -join ', '
+        [void]$sb.AppendLine("<div class=`"warnbox evidence`">$(& $e $script:EvidenceChangedPrefix) for $(& $e $changed.Count) collection(s): $names. Each disk image changed between the hash taken before it was mounted and the one taken after teardown. See the host's notes and the run details before relying on that evidence.</div>")
+    }
 
     if ($Data.MixedFloors) {
         [void]$sb.AppendLine("<div class=`"warnbox`">Rows come from runs with different severity floors ($(& $e ($Data.Floors -join ', '))). A host with no detections is only clean at the floor its run used. See Run details.</div>")

@@ -25,6 +25,7 @@ BeforeAll {
     $script:realRemoveDiff = ${function:Remove-DifferencingChild}
     $script:realRemoveMount = ${function:Remove-MountFolder}
     $script:realRemoveExtract = ${function:Remove-CollectionExtract}
+    $script:realHash = ${function:Get-ImageSha256}
     function script:Leaf($p) { [System.IO.Path]::GetFileName($p) }
     function script:Resolve-Test($c, [switch]$Keep) { Resolve-CollectionInput -Collection $c -OutputRoot $out -MaxUncompressedBytes $cap -MaxRatio 250 -KeepArtifacts:$Keep }
 }
@@ -78,6 +79,8 @@ Describe 'Differencing mount orchestration' {
         $script:diskpartFails = $false
         $script:dismountFails = $false
         $script:volumes = @($vLetter)
+        $script:hashCalls = 0
+        $script:changeAfterHash = $false
 
         Mock Assert-MountSupported { }
         Mock Test-ImageAttached { [bool]$script:attached[$ImagePath] }
@@ -99,6 +102,14 @@ Describe 'Differencing mount orchestration' {
         Mock Remove-DifferencingChild { $script:log.Add("removediff $(Leaf $Path)"); & $script:realRemoveDiff -Path $Path -DiffRoot $DiffRoot }
         Mock Remove-MountFolder { $script:log.Add('removemountfolder'); & $script:realRemoveMount -Path $Path -MountRoot $MountRoot }
         Mock Remove-CollectionExtract { $script:log.Add('removeextract'); & $script:realRemoveExtract -Path $Path -WorkRoot $WorkRoot }
+        # The real hash of the real file. changeAfterHash simulates an image
+        # that was written to: every hash after the first comes out different.
+        Mock Get-ImageSha256 {
+            $script:log.Add("hash $(Leaf $Path)")
+            $script:hashCalls++
+            if ($script:changeAfterHash -and $script:hashCalls -gt 1) { return ('0' * 64) }
+            & $script:realHash -Path $Path
+        }
     }
 
     It 'raw VHDX with a drive letter: the child is created and mounted, never the parent' {
@@ -108,13 +119,17 @@ Describe 'Differencing mount orchestration' {
         $r.ChildPath | Should -Be $child
         $r.ImagePath | Should -Be $parentRaw
         [System.IO.Path]::GetExtension($r.ChildPath) | Should -BeExactly '.vhdx'
-        ($log -join ' > ') | Should -Be 'create HOST01.vhdx > mount HOST01.vhdx'
+        ($log -join ' > ') | Should -Be 'hash HOST01.VHDX > create HOST01.vhdx > mount HOST01.vhdx'
         $scripts[0] | Should -BeExactly "create vdisk file=`"$child`" parent=`"$parentRaw`""
         $log.Clear()
         Invoke-CollectionCleanup -Resolved $r
-        ($log -join ' > ') | Should -Be 'dismount HOST01.vhdx > removediff HOST01.vhdx'
+        ($log -join ' > ') | Should -Be 'dismount HOST01.vhdx > removediff HOST01.vhdx > hash HOST01.VHDX'
         Test-Path -LiteralPath $child | Should -BeFalse
         (Get-FileHash -LiteralPath $parentRaw).Hash | Should -Be $hashRaw
+        $r.ImageHash.ImagePath | Should -Be $parentRaw
+        $r.ImageHash.Before | Should -BeExactly $hashRaw
+        $r.ImageHash.After | Should -BeExactly $hashRaw
+        $r.ImageHash.Match | Should -BeTrue
     }
 
     It 'raw VHD without a letter: _mnt access path, then access path, dismount, mount folder, child' {
@@ -122,10 +137,10 @@ Describe 'Differencing mount orchestration' {
         $r = Resolve-Test $vhdCol
         $r.Path | Should -Be (Join-TestPath $out '_mnt' 'HOST02')
         [System.IO.Path]::GetExtension($r.ChildPath) | Should -BeExactly '.vhd'
-        ($log -join ' > ') | Should -Be 'create HOST02.vhd > mount HOST02.vhd > addaccess 6/2'
+        ($log -join ' > ') | Should -Be 'hash HOST02.vhd > create HOST02.vhd > mount HOST02.vhd > addaccess 6/2'
         $log.Clear()
         Invoke-CollectionCleanup -Resolved $r
-        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST02.vhd > removemountfolder > removediff HOST02.vhd'
+        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST02.vhd > removemountfolder > removediff HOST02.vhd > hash HOST02.vhd'
         Test-Path -LiteralPath $r.Path | Should -BeFalse
         Test-Path -LiteralPath $r.ChildPath | Should -BeFalse
     }
@@ -138,7 +153,9 @@ Describe 'Differencing mount orchestration' {
         $scripts[0] | Should -BeExactly "create vdisk file=`"$($r.ChildPath)`" parent=`"$extracted`""
         $log.Clear()
         Invoke-CollectionCleanup -Resolved $r
-        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST03.vhdx > removemountfolder > removediff HOST03.vhdx > removeextract'
+        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST03.vhdx > removemountfolder > removediff HOST03.vhdx > hash HOST03.vhdx > removeextract'
+        $r.ImageHash.ImagePath | Should -Be $extracted
+        $r.ImageHash.Match | Should -BeTrue
         Test-Path -LiteralPath $r.ExtractPath | Should -BeFalse
         Test-Path -LiteralPath $r.ChildPath | Should -BeFalse
         (Get-FileHash -LiteralPath $zipPath).Hash | Should -Be $hashZip
@@ -149,7 +166,8 @@ Describe 'Differencing mount orchestration' {
         $r = Resolve-Test $zipCol -Keep
         $log.Clear()
         Invoke-CollectionCleanup -Resolved $r
-        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST03.vhdx > removemountfolder'
+        ($log -join ' > ') | Should -Be 'removeaccess 6/2 > dismount HOST03.vhdx > removemountfolder > hash HOST03.vhdx'
+        $r.ImageHash.Match | Should -BeTrue
         Test-Path -LiteralPath $r.ChildPath | Should -BeTrue
         Test-Path -LiteralPath $r.ImagePath | Should -BeTrue
         $attached[$r.ChildPath] | Should -BeFalse
@@ -164,6 +182,9 @@ Describe 'Differencing mount orchestration' {
         $m = Get-ThrownMessage { Invoke-CollectionCleanup -Resolved $r }
         $m | Should -BeLike '*Dismount*device busy*'
         $m | Should -BeLike "*Left $($r.ChildPath) in place*"
+        $m | Should -BeLike "*Did not check the SHA-256 of $($r.ImagePath) after the run, because the image may still be mounted*"
+        $r.ImageHash.After | Should -BeNullOrEmpty
+        $r.ImageHash.Match | Should -BeNullOrEmpty
         Test-Path -LiteralPath $r.ChildPath | Should -BeTrue
         Test-Path -LiteralPath $r.ExtractPath | Should -BeTrue
         Test-Path -LiteralPath $r.MountPath | Should -BeTrue
@@ -171,7 +192,8 @@ Describe 'Differencing mount orchestration' {
         $script:dismountFails = $false
         $log.Clear()
         Invoke-CollectionCleanup -Resolved $r
-        ($log -join ' > ') | Should -Be 'dismount HOST03.vhdx > removemountfolder > removediff HOST03.vhdx > removeextract'
+        ($log -join ' > ') | Should -Be 'dismount HOST03.vhdx > removemountfolder > removediff HOST03.vhdx > hash HOST03.vhdx > removeextract'
+        $r.ImageHash.Match | Should -BeTrue
     }
 
     It 'a diskpart failure is reported, nothing is mounted and nothing is left behind' {
@@ -194,7 +216,8 @@ Describe 'Differencing mount orchestration' {
         $r = Resolve-Test $rawCol
         (Get-Content -LiteralPath $stale -Raw) | Should -BeLike 'child of *'
         $log[0] | Should -Be 'removediff HOST01.vhdx'
-        $log[1] | Should -Be 'create HOST01.vhdx'
+        $log[1] | Should -Be 'hash HOST01.VHDX'
+        $log[2] | Should -Be 'create HOST01.vhdx'
         Invoke-CollectionCleanup -Resolved $r
     }
 
@@ -224,6 +247,24 @@ Describe 'Differencing mount orchestration' {
         $child = Join-TestPath $out '_diff' 'HOST01.vhdx'
         Test-Path -LiteralPath $child | Should -BeFalse
         $attached[$child] | Should -BeFalse
+    }
+
+    It 'records a mismatch when the image hashes differently after teardown' {
+        $script:changeAfterHash = $true
+        $r = Resolve-Test $rawCol
+        Invoke-CollectionCleanup -Resolved $r
+        $r.ImageHash.Before | Should -BeExactly $hashRaw
+        $r.ImageHash.After | Should -BeExactly ('0' * 64)
+        $r.ImageHash.Match | Should -BeFalse
+    }
+
+    It 'hashes again after a mount that fails partway, into the caller''s list' {
+        $script:volumes = @()
+        $records = New-Object System.Collections.Generic.List[object]
+        Get-ThrownMessage { Resolve-CollectionInput -Collection $rawCol -OutputRoot $out -MaxUncompressedBytes $cap -MaxRatio 250 -ImageHashRecord $records } | Should -BeLike '*No readable volume*'
+        $records.Count | Should -Be 1
+        $records[0].Match | Should -BeTrue
+        ($log -join ' > ') | Should -Be 'hash HOST01.VHDX > create HOST01.vhdx > mount HOST01.vhdx > dismount HOST01.vhdx > removediff HOST01.vhdx > hash HOST01.VHDX'
     }
 
     It 'never modifies the parent images' {

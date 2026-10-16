@@ -451,3 +451,63 @@ Describe 'A rerun that fails before Hayabusa starts' {
         $html.Contains('H1/H1_hayabusa.log') | Should -BeFalse
     }
 }
+
+Describe 'Evidence image hash' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:R = New-BatchRoot 'image-hash'
+        # IMGOK and IMGBAD stand in for disk image collections. The mount is
+        # simulated: resolve records a hash pair as Mount-CollectionImage and
+        # teardown would, then hands Hayabusa the collection folder.
+        New-FakeHost -InputRoot $R.In -Name 'IMGOK' -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS01' 'high' 'RuleA')) } | Out-Null
+        New-FakeHost -InputRoot $R.In -Name 'IMGBAD' -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS02' 'high' 'RuleA')) } | Out-Null
+        New-FakeHost -InputRoot $R.In -Name 'LOOSE' -Files @{ 'r.csv' = @($TimelineHeader) } | Out-Null
+        $script:goodHash = 'A' * 64
+        $script:badHash = 'B' * 64
+        Mock Resolve-CollectionInput {
+            $after = $script:goodHash
+            if ($Collection.Collection -eq 'IMGBAD') { $after = $script:badHash }
+            $record = [pscustomobject]@{ ImagePath = "D:\Evidence\$($Collection.Collection).vhdx"; Before = $script:goodHash; After = $after; Match = ($after -eq $script:goodHash) }
+            $ImageHashRecord.Add($record)
+            [pscustomobject]@{
+                Collection = $Collection.Collection; Source = $Collection.Source; InputType = 'Vhdx'; SourcePath = $Collection.SourcePath
+                Path = $Collection.SourcePath; ImagePath = $record.ImagePath; ChildPath = $null; ExtractPath = $null; MountPath = $null
+                ImageHash = $record; Warnings = (New-Object System.Collections.Generic.List[string]); Teardown = (New-Object System.Collections.Generic.List[object]); KeepArtifacts = $false
+            }
+        } -ParameterFilter { $Collection.Collection -like 'IMG*' }
+        $script:hashes = [ordered]@{}
+        $cols = @(Get-InputCollection -InputRoot $R.In -WarningAction SilentlyContinue)
+        $w = $null
+        $script:sum = Invoke-CollectionBatch -Collections $cols -ManifestPath $R.Manifest -OutputRoot $R.Out -HayabusaPath $hb -Resolved $resolved -Threads $null -RunId 'run1' -ImageHash $hashes -WarningVariable w -WarningAction SilentlyContinue
+        $script:warns = @($w | ForEach-Object { "$_" })
+        $script:rows = Get-ManifestRowMap $R
+        Invoke-Rollup -OutputRoot $R.Out -WarningAction SilentlyContinue | Out-Null
+        $script:html = [System.IO.File]::ReadAllText((Join-TestPath $R.Out 'triage_dashboard.html'))
+    }
+
+    It 'keeps a host whose image hashes the same Completed, and returns its record' {
+        $rows.IMGOK.Status | Should -Be 'Completed'
+        $rows.IMGOK.Error | Should -Be ''
+        $hashes['IMGOK'].Before | Should -BeExactly $goodHash
+        $hashes['IMGOK'].After | Should -BeExactly $goodHash
+        $hashes['IMGOK'].Match | Should -BeTrue
+    }
+    It 'fails a host whose image hashed differently, the integrity error first, even though Hayabusa succeeded' {
+        $rows.IMGBAD.Status | Should -Be 'Failed'
+        $rows.IMGBAD.Error | Should -BeLike "Evidence integrity check failed: the SHA-256 of D:\Evidence\IMGBAD.vhdx changed during this run, from $goodHash before it was mounted to $badHash after teardown.*"
+        $rows.IMGBAD.Detections | Should -Be '1'
+        $hashes['IMGBAD'].Match | Should -BeFalse
+        $sum.Failed | Should -Be 1
+        @($warns | Where-Object { $_ -like '*IMGBAD ... Failed: Evidence integrity check failed*' }).Count | Should -Be 1
+    }
+    It 'returns no record for a loose collection' {
+        $hashes.Contains('LOOSE') | Should -BeTrue
+        $hashes['LOOSE'] | Should -BeNullOrEmpty
+    }
+    It 'heads the dashboard with the failure and shows it in the host''s notes' {
+        $html | Should -Match '<div class="warnbox evidence">Evidence integrity check failed for 1 collection\(s\): IMGBAD\.'
+        $html | Should -Match '<span class="err">Evidence integrity check failed: the SHA-256 of '
+        $box = [regex]::Match($html, '<div class="warnbox evidence">[^<]*</div>').Value
+        $box.Contains('IMGOK') | Should -BeFalse
+    }
+}

@@ -39,7 +39,7 @@
 
 .PARAMETER OutputRoot
     Where per-host output, the manifest, run metadata and the rollup are
-    written. Created if missing. Must not be inside InputRoot.
+    written. Created if missing. Must not be inside InputRoot, or hold it.
 
 .PARAMETER HayabusaPath
     Full path to hayabusa.exe.
@@ -128,7 +128,7 @@ if ($Help) {
         ''
         'Required:'
         '  -InputRoot      Parent folder holding one entry per host'
-        '  -OutputRoot     Where everything is written. Created if missing. Must not be inside InputRoot'
+        '  -OutputRoot     Where everything is written. Created if missing. Must not be inside InputRoot, or hold it'
         '  -HayabusaPath   Full path to hayabusa.exe'
         ''
         'Options:'
@@ -167,6 +167,12 @@ $HayabusaPath = ConvertTo-NormalizedPath -Path $HayabusaPath
 
 if (Test-PathIsWithin -Path $OutputRoot -Parent $InputRoot) {
     throw "OutputRoot ($OutputRoot) must not be inside InputRoot ($InputRoot). Output would be picked up as a host and written next to evidence."
+}
+# The reverse too: the tool creates and deletes files under OutputRoot, so
+# evidence there, such as an image in a _diff folder kept by -KeepArtifacts,
+# could share a path with a differencing disk it is about to clear.
+if (Test-PathIsWithin -Path $InputRoot -Parent $OutputRoot) {
+    throw "InputRoot ($InputRoot) must not be inside OutputRoot ($OutputRoot). The tool creates and deletes files under OutputRoot, so evidence there could be deleted. Move the evidence out of OutputRoot, or choose a different OutputRoot."
 }
 
 # Settings
@@ -215,6 +221,12 @@ if ($unreadableZips.Count -gt 0) {
 
 # Fail before anything is written if disk images need an elevated session.
 Assert-ElevationForContainer -Collections $collections
+
+# Each disk image is read in full twice, so say so before a long run starts.
+$imageCount = @($collections | Where-Object { $_.InputType -eq 'Vhd' -or $_.InputType -eq 'Vhdx' -or ($_.InputType -eq 'Zip' -and $null -ne $_.Zip -and $_.Zip.Readable -and @($_.Zip.ImageEntries).Count -gt 0) }).Count
+if ($imageCount -gt 0) {
+    Write-Information "$imageCount disk image(s) will be hashed with SHA-256 before mounting and again after teardown, to show each is unchanged. Each hash reads the whole image, so expect a pause on a large one. Hosts already finished are skipped and not hashed."
+}
 
 if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
     throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
@@ -273,9 +285,11 @@ Write-Verbose "RunId $runId"
 Write-Verbose "Manifest: $manifestPath"
 Write-Verbose "Run metadata: $runMetaPath"
 
+$imageHashes = [ordered]@{}
 $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
     -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
-    -Force:$Force -KeepArtifacts:$KeepArtifacts
+    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes
+Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
 
 # A rollup failure is recorded and reported, and never hides the batch
 # results already in the manifest.
