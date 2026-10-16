@@ -146,6 +146,29 @@ Describe 'Native capture' {
     }
 }
 
+Describe 'Error from the log' {
+    BeforeAll {
+        function script:New-StderrLog([string]$Name, [string[]]$Stderr) {
+            $lines = @('Started (UTC): 2026-10-16T00:00:00Z', '--- output ---', 'Results Summary: x')
+            $lines += @($Stderr | ForEach-Object { "[stderr] $_" })
+            $lines += @('--- end ---', 'Exit code: 0')
+            Write-TestText -Path (Join-TestPath $TestDrive "$Name.log") -Line $lines
+        }
+    }
+    It 'returns the [ERROR] lines without the prefix, ahead of other stderr' {
+        $log = New-StderrLog 'err' @('warning: noisy', '[ERROR] No .evtx files were found.', '', 'System.Management.Automation.RemoteException')
+        Get-HayabusaLogError -LogPath $log | Should -BeExactly 'No .evtx files were found.'
+    }
+    It 'falls back to the other stderr lines, up to three' {
+        $log = New-StderrLog 'other' @('one', 'two', 'three', 'four')
+        Get-HayabusaLogError -LogPath $log | Should -BeExactly 'one / two / three'
+    }
+    It 'returns null when stderr was empty or there is no log' {
+        Get-HayabusaLogError -LogPath (New-StderrLog 'none' @('', 'System.Management.Automation.RemoteException')) | Should -BeNullOrEmpty
+        Get-HayabusaLogError -LogPath (Join-TestPath $TestDrive 'missing.log') | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Tested version in the docs' {
     It 'matches the tested version between every tested-version marker in <File>' -ForEach @(
         @{ File = 'README.md' }

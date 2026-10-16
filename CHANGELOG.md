@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A host where Hayabusa exited 0 but wrote no CSV is now recorded as Failed, with Hayabusa's own error from stderr in Error, and is retried on the next run. It used to be recorded as Completed with no detections and a warning, and skipped on every rerun. Hayabusa does this when it stops on an error: for a `--timeline-start` it can't parse, 4.2.0 exits 0, writes no CSV, and prints the reason only on stderr. A run that matches nothing writes an empty CSV, which is still Completed with no detections. Hosts an earlier version already recorded this way stay Completed: find them by the warning "Hayabusa exited 0 but wrote no CSV" in `run_manifest.csv`, delete their rows and run again, or rerun everything with `-Force`.
+- The compatibility self-test's FAIL line for a run that exits 0 with no CSV now gives Hayabusa's error from stderr, so the watcher's issue says why the run failed. Its note that the tool records a missing CSV as a failed host was wrong before this fix and is now right.
+
 ## [0.8.1] - 2026-10-15
 
 ### Security

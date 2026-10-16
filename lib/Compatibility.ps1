@@ -506,23 +506,6 @@ function Get-HayabusaRejection {
     return $reason
 }
 
-function Get-HayabusaLogStderr {
-    # The stderr lines Invoke-HayabusaProcess recorded in a run's log,
-    # without their [stderr] prefix.
-    [CmdletBinding()]
-    [OutputType([string[]])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$LogPath
-    )
-
-    if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) {
-        return [string[]]@()
-    }
-    $lines = @(Get-Content -LiteralPath $LogPath -Encoding UTF8 | Where-Object { $_ -like '`[stderr`] *' } | ForEach-Object { $_.Substring(9) })
-    return [string[]]$lines
-}
-
 function Test-CompatibilityRun {
     <#
     .SYNOPSIS
@@ -537,8 +520,9 @@ function Test-CompatibilityRun {
         which is what Hayabusa 4.1.0 writes when nothing matches. A run
         expected to detect nothing that still detects the sample fails,
         because the filter in Filter was accepted but not applied. Exit 0
-        with no CSV at all is a failure, because the tool counts a missing
-        CSV as a failed host.
+        with no CSV at all is a failure, because Hayabusa only does that
+        when it stopped on an error, and the tool records it as a failed
+        host. The check gives Hayabusa's [ERROR] line from the log.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -582,7 +566,15 @@ function Test-CompatibilityRun {
         New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "exit code $ExitCode, possible compatibility break. $reason. Flags sent: $sent. Log: $LogPath"
     }
     elseif (-not $hasCsv) {
-        New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "exit code 0 but no CSV was written at $CsvPath. The tool treats a missing CSV as a failed host. Log: $LogPath"
+        # Hayabusa exits 0 without a CSV when it stopped on an error, and
+        # says why only on stderr. The watcher keeps no log, so the reason
+        # goes in the check itself.
+        $said = 'Hayabusa printed no error'
+        $reason = Get-HayabusaLogError -LogPath $LogPath
+        if ($null -ne $reason) {
+            $said = "Hayabusa said: $($reason.TrimEnd('.'))"
+        }
+        New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "exit code 0 but no CSV was written, which the tool records as a failed host. $said. Flags sent: $sent. Log: $LogPath"
     }
     elseif ($ExpectDetection -and $rows -eq 0) {
         New-CompatibilityCheck -Name "run $Name" -Passed $false -Detail "accepted, but the sample's 'Log Cleared' detection did not fire, so there is no CSV header to check. Flags sent: $sent"
