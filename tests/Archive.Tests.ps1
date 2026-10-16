@@ -51,15 +51,61 @@ Describe 'Zip bomb' {
         Edit-ZipHeader -Path $zp -DeclaredSize 1000
         $dest = Join-TestPath $zd 'l'
         $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 1000000 }
-        if ($null -eq $m) {
-            # The runtime stopped reading at the declared size.
-            (Get-Item -LiteralPath (Join-TestPath $dest 'big.bin')).Length | Should -Be 1000
+        # Either the byte counter stops it, or the runtime stops reading at
+        # the declared size and the 1000 bytes fail the CRC. Both refuse it
+        # and remove the partial extract.
+        $m | Should -Match '(expanded past its declared size|lie\.zip may be damaged: entry ''big\.bin'' failed its CRC-32 check)'
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+}
+
+Describe 'Damaged archives' {
+    BeforeAll {
+        $script:dz = New-TestDirectory (Join-TestPath $TestDrive 'damaged')
+        $script:noise = New-Object byte[] 4000
+        (New-Object System.Random 7).NextBytes($noise)
+    }
+    It 'refuses an entry whose bytes no longer match its stored CRC-32, naming it' {
+        $data = [System.Text.Encoding]::ASCII.GetBytes('ElfFile' + ('A' * 5000))
+        $zp = New-TestZip -Path (Join-TestPath $dz 'flipped.zip') -Entries ([ordered]@{ 'Logs/Security.evtx' = $data }) -NoCompression
+        $b = [System.IO.File]::ReadAllBytes($zp)
+        $at = [System.Text.Encoding]::ASCII.GetString($b).IndexOf('AAAAAAAA')
+        $b[$at + 100] = [byte][char]'B'
+        [System.IO.File]::WriteAllBytes($zp, $b)
+        $dest = Join-TestPath $dz 'f'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "flipped.zip may be damaged: entry 'Logs/Security.evtx' failed its CRC-32 check: the ZIP stores *, the extracted file is *. Copy the ZIP again from the original*"
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'refuses an entry that ends short of its declared size, naming it' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'short.zip') -Entries ([ordered]@{ 'Logs/System.evtx' = $noise })
+        Edit-ZipHeader -Path $zp -DeclaredSize 9000
+        $dest = Join-TestPath $dz 's'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "short.zip may be damaged: entry 'Logs/System.evtx' ended after 4000 of its declared 9000 bytes.*"
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'still extracts an intact archive, compressed or not' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'ok.zip') -Entries ([ordered]@{ 'a.evtx' = $noise; 'b/c.evtx' = ('x' * 3000) })
+        Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $dz 'ok') -MaxUncompressedBytes 1GB -MaxRatio 250 | Should -Be 7000
+        $zp2 = New-TestZip -Path (Join-TestPath $dz 'ok2.zip') -Entries ([ordered]@{ 'a.evtx' = $noise }) -NoCompression
+        Expand-ZipArchiveSafe -Path $zp2 -Destination (Join-TestPath $dz 'ok2') -MaxUncompressedBytes 1GB -MaxRatio 250 | Should -Be 4000
+    }
+    It 'reads the same stored CRC-32 as .NET, where .NET exposes it' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'crc.zip') -Entries ([ordered]@{ 'a.evtx' = $noise; 'dir/'= ''; 'b.evtx' = 'hello' })
+        $parsed = @((Get-ZipCentralDirectory -Path $zp).Entries)
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($zp)
+        try {
+            $parsed.Count | Should -Be $archive.Entries.Count
+            if ($null -eq [System.IO.Compression.ZipArchiveEntry].GetProperty('Crc32')) {
+                Set-ItResult -Skipped -Because '.NET Framework does not expose ZipArchiveEntry.Crc32'
+                return
+            }
+            for ($i = 0; $i -lt $parsed.Count; $i++) {
+                $parsed[$i].Crc32 | Should -Be $archive.Entries[$i].Crc32
+            }
         }
-        else {
-            # The byte counter stopped it and removed the partial extract.
-            $m | Should -BeLike '*expanded past its declared size*'
-            Test-Path -LiteralPath $dest | Should -BeFalse
-        }
+        finally { $archive.Dispose() }
     }
 }
 

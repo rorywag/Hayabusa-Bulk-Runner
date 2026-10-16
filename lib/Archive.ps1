@@ -22,6 +22,74 @@ function Initialize-ZipSupport {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 }
 
+# CRC-32 (IEEE 802.3), as ZIP stores for each entry. Neither runtime checks
+# it when reading an entry, and a PowerShell loop manages about a megabyte a
+# second, far too slow for evidence ZIPs, so this small class is compiled
+# once, the first time a ZIP is extracted.
+$script:ZipCrc32Source = @'
+namespace HayabusaBulkRunner
+{
+    public static class ZipCrc32
+    {
+        private static readonly uint[] Table = BuildTable();
+
+        private static uint[] BuildTable()
+        {
+            uint[] table = new uint[256];
+            for (uint n = 0; n < 256; n++)
+            {
+                uint c = n;
+                for (int k = 0; k < 8; k++)
+                {
+                    c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                }
+                table[n] = c;
+            }
+            return table;
+        }
+
+        // Continues a CRC over buffer[offset..offset+count). Start from 0.
+        public static uint Update(uint crc, byte[] buffer, int offset, int count)
+        {
+            uint c = ~crc;
+            for (int i = offset; i < offset + count; i++)
+            {
+                c = Table[(c ^ buffer[i]) & 0xFF] ^ (c >> 8);
+            }
+            return ~c;
+        }
+    }
+}
+'@
+
+function Initialize-ZipCrc32 {
+    [CmdletBinding()]
+    param()
+
+    if (-not ('HayabusaBulkRunner.ZipCrc32' -as [type])) {
+        Add-Type -TypeDefinition $script:ZipCrc32Source -Language CSharp
+    }
+}
+
+function Get-ZipDamageMessage {
+    # The error for an entry that did not extract to what the ZIP recorded.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Entry,
+
+        [Parameter(Mandatory)]
+        [string]$Problem
+    )
+
+    $name = [System.IO.Path]::GetFileName($Path)
+    return "$name may be damaged: entry '$Entry' $Problem. Copy the ZIP again from the original and check it against its source hash, then rerun."
+}
+
 function Test-DiskImageName {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -92,9 +160,10 @@ function Get-ZipCentralDirectory {
     .SYNOPSIS
         Reads a ZIP's central directory directly, without .NET's ZIP reader.
     .DESCRIPTION
-        Returns each entry's name, compression method and general-purpose
-        flags, which ZipArchiveEntry does not expose on .NET Framework. Only
-        bytes are read. Nothing is decompressed.
+        Returns each entry's name, compression method, general-purpose flags
+        and stored CRC-32, which ZipArchiveEntry does not expose on .NET
+        Framework, in central directory order. Only bytes are read. Nothing
+        is decompressed.
 
         Fails safe: any problem parsing the bytes returns Ok = $false with
         the reason in Error. It never throws and never reports a ZIP it
@@ -214,6 +283,7 @@ function Get-ZipCentralDirectory {
             }
             $flags = [int][BitConverter]::ToUInt16($cd, $pos + 8)
             $method = [int][BitConverter]::ToUInt16($cd, $pos + 10)
+            $crc32 = [BitConverter]::ToUInt32($cd, $pos + 16)
             $nameLength = [int][BitConverter]::ToUInt16($cd, $pos + 28)
             $extraLength = [int][BitConverter]::ToUInt16($cd, $pos + 30)
             $commentLength = [int][BitConverter]::ToUInt16($cd, $pos + 32)
@@ -227,6 +297,7 @@ function Get-ZipCentralDirectory {
                     Method    = $method
                     Flags     = $flags
                     Encrypted = (($flags -band 0x41) -ne 0) -or ($method -eq 99)
+                    Crc32     = $crc32
                 })
             $pos = $next
         }
@@ -717,8 +788,11 @@ function Expand-ZipArchiveSafe {
         is a streaming copy that counts bytes, so an entry whose header
         understates its size is stopped as soon as it writes more than it
         declared, and the run stops if the running total passes the cap.
-        Nothing is executed or interpreted. Destination must not exist. On
-        any failure the partial extract is removed.
+        Each file must then come to exactly its declared size and match the
+        CRC-32 the ZIP stored for it, or the archive is reported as possibly
+        damaged, naming the entry. Nothing is executed or interpreted.
+        Destination must not exist. On any failure the partial extract is
+        removed.
 
         Deep paths, such as KAPE's WER report archives under ProgramData,
         are written through the \\?\ extended-length prefix on Windows, so
@@ -744,6 +818,7 @@ function Expand-ZipArchiveSafe {
     )
 
     Initialize-ZipSupport
+    Initialize-ZipCrc32
 
     if (Test-Path -LiteralPath $Destination) {
         throw "Extraction folder already exists: $Destination"
@@ -769,13 +844,23 @@ function Expand-ZipArchiveSafe {
             throw ("Not enough free space to extract {0}: needs {1:N0} bytes including margin, {2:N0} bytes free." -f $Path, $needed, $free)
         }
 
+        # The stored CRC-32 of each entry, from the tool's own read of the
+        # central directory, in the same order .NET lists the entries.
+        $directory = Get-ZipCentralDirectory -Path $Path
+        if (-not $directory.Ok -or @($directory.Entries).Count -ne $archive.Entries.Count) {
+            $name = [System.IO.Path]::GetFileName($Path)
+            throw "$name may be damaged: its central directory could not be read consistently. Copy the ZIP again from the original and check it against its source hash, then rerun."
+        }
+
         [System.IO.Directory]::CreateDirectory($Destination) | Out-Null
         $created = $true
 
         $buffer = New-Object byte[] $script:ExtractBufferSize
         $written = [long]0
 
-        foreach ($entry in $archive.Entries) {
+        for ($index = 0; $index -lt $archive.Entries.Count; $index++) {
+            $entry = $archive.Entries[$index]
+            $storedCrc = [uint32]$directory.Entries[$index].Crc32
             if ($entry.FullName.Length -eq 0) {
                 continue
             }
@@ -794,6 +879,7 @@ function Expand-ZipArchiveSafe {
                 $in = $entry.Open()
                 $out = New-Object System.IO.FileStream((Get-ExtendedLengthPath -Path $target), [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
                 $entryWritten = [long]0
+                $crc = [uint32]0
                 while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
                     $entryWritten += $read
                     $written += $read
@@ -803,7 +889,14 @@ function Expand-ZipArchiveSafe {
                     if ($written -gt $MaxUncompressedBytes) {
                         throw "Extraction passed the cap of $MaxUncompressedBytes bytes (ZipMaxUncompressedGB)."
                     }
+                    $crc = [HayabusaBulkRunner.ZipCrc32]::Update($crc, $buffer, 0, $read)
                     $out.Write($buffer, 0, $read)
+                }
+                if ($entryWritten -ne $entry.Length) {
+                    throw (Get-ZipDamageMessage -Path $Path -Entry $entry.FullName -Problem "ended after $entryWritten of its declared $($entry.Length) bytes")
+                }
+                if ($crc -ne $storedCrc) {
+                    throw (Get-ZipDamageMessage -Path $Path -Entry $entry.FullName -Problem ('failed its CRC-32 check: the ZIP stores {0:X8}, the extracted file is {1:X8}' -f $storedCrc, $crc))
                 }
             }
             finally {

@@ -71,13 +71,17 @@ function New-TestByteArray {
 
 function New-TestZip {
     # Entries is an ordered dictionary of entry name to byte[] or string.
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][System.Collections.IDictionary]$Entries)
+    # NoCompression keeps each entry's bytes as is in the file, so a test
+    # can find and change them.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][System.Collections.IDictionary]$Entries, [switch]$NoCompression)
+    $level = [System.IO.Compression.CompressionLevel]::Optimal
+    if ($NoCompression) { $level = [System.IO.Compression.CompressionLevel]::NoCompression }
     New-TestDirectory -Path (Split-Path -Parent $Path) | Out-Null
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
     $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
         foreach ($k in $Entries.Keys) {
-            $entry = $zip.CreateEntry($k, [System.IO.Compression.CompressionLevel]::Optimal)
+            $entry = $zip.CreateEntry($k, $level)
             $s = $entry.Open()
             $v = $Entries[$k]
             if ($v -is [string]) { $v = [System.Text.Encoding]::UTF8.GetBytes($v) }
