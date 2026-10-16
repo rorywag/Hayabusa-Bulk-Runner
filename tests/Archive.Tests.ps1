@@ -14,11 +14,6 @@ Describe 'Zip slip' {
         @{ Case = 'absolute'; Entry = '/abs.txt' }
         @{ Case = 'UNC'; Entry = '\\server\share\x.txt' }
         @{ Case = 'drive'; Entry = 'C:/x.txt' }
-        @{ Case = 'alternate data stream'; Entry = 'file.txt:hidden' }
-        @{ Case = 'device folder'; Entry = 'CON/x.txt' }
-        @{ Case = 'device name'; Entry = 'logs/aux.evtx' }
-        @{ Case = 'wildcard'; Entry = 'bad?.txt' }
-        @{ Case = 'trailing dot'; Entry = 'trail./x.txt' }
     ) {
         $zp = New-TestZip -Path (Join-TestPath $zd ("slip{0}.zip" -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ 'ok/fine.evtx' = (New-TestByteArray 10 -Random); $Entry = (New-TestByteArray 10 -Random) })
         $dest = Join-TestPath $zd ('x' + [guid]::NewGuid().ToString('N'))
@@ -29,6 +24,51 @@ Describe 'Zip slip' {
     It 'passes ordinary names' {
         Test-ZipEntryName -Name 'C/Windows/System32/winevt/Logs/Microsoft-Windows-Sysmon%4Operational.evtx' | Should -BeNullOrEmpty
         Test-ZipEntryName -Name './a/b.evtx' | Should -BeNullOrEmpty
+    }
+    It 'treats a name that is both traversal and illegal on Windows as traversal' {
+        $p = Get-ZipEntryNameProblem -Name '../a?b.txt'
+        $p.Traversal | Should -BeTrue
+        $p.Reason | Should -Be 'parent directory segment'
+    }
+    It 'still refuses the whole archive as unsafe when traversal sits beside a name Windows can''t hold' {
+        $zp = New-TestZip -Path (Join-TestPath $zd 'mixed.zip') -Entries ([ordered]@{ '../evil.txt' = 'x'; 'bad?.txt' = 'y' })
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'mixed') -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeExactly "Archive refused, 2 unsafe entry name(s): '../evil.txt': parent directory segment; 'bad?.txt': character not valid in a Windows file name"
+        (Get-ZipEntryInfo -Path $zp).ReadReason | Should -Be 'BadName'
+    }
+}
+
+Describe 'Names Windows can''t hold' {
+    BeforeAll { $script:wn = New-TestDirectory (Join-TestPath $TestDrive 'winnames') }
+
+    It 'lists <Case> (<Entry>) at discovery, and extraction gives the same guidance, writing nothing' -ForEach @(
+        @{ Case = 'alternate data stream'; Entry = 'C/Users/x/file.txt:Zone.Identifier'; Reason = 'colon in name (alternate data stream)' }
+        @{ Case = 'device folder'; Entry = 'CON/x.txt'; Reason = 'reserved device name' }
+        @{ Case = 'device name'; Entry = 'logs/aux.evtx'; Reason = 'reserved device name' }
+        @{ Case = 'wildcard'; Entry = 'bad?.txt'; Reason = 'character not valid in a Windows file name' }
+        @{ Case = 'star'; Entry = 'logs/a*b.evtx'; Reason = 'character not valid in a Windows file name' }
+        @{ Case = 'trailing dot'; Entry = 'trail./x.txt'; Reason = 'segment ends with a dot or space' }
+        @{ Case = 'trailing space'; Entry = 'trail /x.txt'; Reason = 'segment ends with a dot or space' }
+    ) {
+        $zp = New-TestZip -Path (Join-TestPath $wn ("w{0}.zip" -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ 'ok/fine.evtx' = (New-TestByteArray 10 -Random); $Entry = (New-TestByteArray 10 -Random) })
+        $info = Get-ZipEntryInfo -Path $zp
+        $info.Readable | Should -BeFalse
+        $info.ReadReason | Should -Be 'BadName'
+        $info.ReadError | Should -BeExactly "entry '$Entry' has a name Windows can't use: $Reason"
+        $leaf = Split-Path -Leaf $zp
+        $guidance = "$leaf can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+        Get-ZipGuidance -Source $leaf -Info $info | Should -BeExactly $guidance
+        $dest = Join-TestPath $wn ('x' + [guid]::NewGuid().ToString('N'))
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeExactly $guidance
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'points at the disk image when the ZIP holds one' {
+        $zp = New-TestZip -Path (Join-TestPath $wn 'img.zip') -Entries ([ordered]@{ 'Container/HOST09.vhdx' = 'img'; 'notes:x' = 'y' })
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $wn 'img') -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeExactly "img.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted disk image (HOST09.vhdx) directly in InputRoot, and rerun."
+    }
+    It 'leaves traversal names to extraction, which refuses them as unsafe' {
+        $zp = New-TestZip -Path (Join-TestPath $wn 'trav.zip') -Entries ([ordered]@{ 'a/../../evil.txt' = 'x' })
+        (Get-ZipEntryInfo -Path $zp).Readable | Should -BeTrue
     }
 }
 
@@ -51,15 +91,61 @@ Describe 'Zip bomb' {
         Edit-ZipHeader -Path $zp -DeclaredSize 1000
         $dest = Join-TestPath $zd 'l'
         $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 1000000 }
-        if ($null -eq $m) {
-            # The runtime stopped reading at the declared size.
-            (Get-Item -LiteralPath (Join-TestPath $dest 'big.bin')).Length | Should -Be 1000
+        # Either the byte counter stops it, or the runtime stops reading at
+        # the declared size and the 1000 bytes fail the CRC. Both refuse it
+        # and remove the partial extract.
+        $m | Should -Match '(expanded past its declared size|lie\.zip may be damaged: entry ''big\.bin'' failed its CRC-32 check)'
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+}
+
+Describe 'Damaged archives' {
+    BeforeAll {
+        $script:dz = New-TestDirectory (Join-TestPath $TestDrive 'damaged')
+        $script:noise = New-Object byte[] 4000
+        (New-Object System.Random 7).NextBytes($noise)
+    }
+    It 'refuses an entry whose bytes no longer match its stored CRC-32, naming it' {
+        $data = [System.Text.Encoding]::ASCII.GetBytes('ElfFile' + ('A' * 5000))
+        $zp = New-TestZip -Path (Join-TestPath $dz 'flipped.zip') -Entries ([ordered]@{ 'Logs/Security.evtx' = $data }) -NoCompression
+        $b = [System.IO.File]::ReadAllBytes($zp)
+        $at = [System.Text.Encoding]::ASCII.GetString($b).IndexOf('AAAAAAAA')
+        $b[$at + 100] = [byte][char]'B'
+        [System.IO.File]::WriteAllBytes($zp, $b)
+        $dest = Join-TestPath $dz 'f'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "flipped.zip may be damaged: entry 'Logs/Security.evtx' failed its CRC-32 check: the ZIP stores *, the extracted file is *. Copy the ZIP again from the original*"
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'refuses an entry that ends short of its declared size, naming it' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'short.zip') -Entries ([ordered]@{ 'Logs/System.evtx' = $noise })
+        Edit-ZipHeader -Path $zp -DeclaredSize 9000
+        $dest = Join-TestPath $dz 's'
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeLike "short.zip may be damaged: entry 'Logs/System.evtx' ended after 4000 of its declared 9000 bytes.*"
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'still extracts an intact archive, compressed or not' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'ok.zip') -Entries ([ordered]@{ 'a.evtx' = $noise; 'b/c.evtx' = ('x' * 3000) })
+        Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $dz 'ok') -MaxUncompressedBytes 1GB -MaxRatio 250 | Should -Be 7000
+        $zp2 = New-TestZip -Path (Join-TestPath $dz 'ok2.zip') -Entries ([ordered]@{ 'a.evtx' = $noise }) -NoCompression
+        Expand-ZipArchiveSafe -Path $zp2 -Destination (Join-TestPath $dz 'ok2') -MaxUncompressedBytes 1GB -MaxRatio 250 | Should -Be 4000
+    }
+    It 'reads the same stored CRC-32 as .NET, where .NET exposes it' {
+        $zp = New-TestZip -Path (Join-TestPath $dz 'crc.zip') -Entries ([ordered]@{ 'a.evtx' = $noise; 'dir/'= ''; 'b.evtx' = 'hello' })
+        $parsed = @((Get-ZipCentralDirectory -Path $zp).Entries)
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($zp)
+        try {
+            $parsed.Count | Should -Be $archive.Entries.Count
+            if ($null -eq [System.IO.Compression.ZipArchiveEntry].GetProperty('Crc32')) {
+                Set-ItResult -Skipped -Because '.NET Framework does not expose ZipArchiveEntry.Crc32'
+                return
+            }
+            for ($i = 0; $i -lt $parsed.Count; $i++) {
+                $parsed[$i].Crc32 | Should -Be $archive.Entries[$i].Crc32
+            }
         }
-        else {
-            # The byte counter stopped it and removed the partial extract.
-            $m | Should -BeLike '*expanded past its declared size*'
-            Test-Path -LiteralPath $dest | Should -BeFalse
-        }
+        finally { $archive.Dispose() }
     }
 }
 

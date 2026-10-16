@@ -16,6 +16,9 @@
 
     - version: the version line is read from hayabusa help
     - flag coverage: every flag the tool can emit was sent at least once
+    - sample: Hayabusa read the sample's one event, from the baseline
+      run's summary. A FAIL here means the generated sample is at fault,
+      not the release
     - run: Hayabusa accepted dfir-timeline and every flag, and applied the
       filters. A non-zero exit names the flag, subcommand or value it
       refused, from its stderr
