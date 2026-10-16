@@ -68,12 +68,14 @@ function Invoke-CollectionRun {
         in a finally block, and the final row is written after it so a
         teardown failure is recorded.
 
-        Completed: Hayabusa exited 0. No detections is Completed with zero
-        counts. No CSV at all is Completed with a warning.
+        Completed: Hayabusa exited 0 and wrote a CSV. An empty CSV, which is
+        what Hayabusa writes when nothing matches, is Completed with zero
+        counts.
         CompletedWithErrors: Hayabusa exited non-zero but still wrote a CSV.
         The counts are kept and the exit code goes in Error.
-        Failed: resolve, run, parse or teardown failed, or Hayabusa exited
-        non-zero without writing a CSV.
+        Failed: resolve, run, parse or teardown failed, or Hayabusa wrote no
+        CSV. With exit 0 that means Hayabusa stopped on an error, and its
+        [ERROR] line from stderr goes in Error.
 
         Any failure is caught and recorded, so one collection cannot stop
         the batch. If the run is interrupted the row stays Running and is
@@ -173,11 +175,21 @@ function Invoke-CollectionRun {
 
         $summary = Get-HayabusaResultSummary -CsvPath $paths.Csv
 
-        if ($exitCode -eq 0) {
+        if ($exitCode -eq 0 -and $summary.Exists) {
             $status = 'Completed'
-            if (-not $summary.Exists) {
-                $warnings.Add('Hayabusa exited 0 but wrote no CSV. Counted as no detections.')
+        }
+        elseif ($exitCode -eq 0) {
+            # A run that matches nothing still writes an empty CSV. Hayabusa
+            # exits 0 without one when it stopped on an error, such as a time
+            # window it can't parse, and says why only on stderr.
+            $reason = Get-HayabusaLogError -LogPath $paths.Log
+            if ($null -eq $reason) {
+                $errors.Add("Hayabusa exited 0 but wrote no CSV, and printed no error. See $($paths.Log).")
             }
+            else {
+                $errors.Add("Hayabusa exited 0 but wrote no CSV: $($reason.TrimEnd('.')). See $($paths.Log).")
+            }
+            $status = 'Failed'
         }
         elseif ($summary.Exists) {
             $status = 'CompletedWithErrors'

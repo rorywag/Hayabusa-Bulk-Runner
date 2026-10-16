@@ -38,8 +38,11 @@ Describe 'Batch outcomes' {
         New-FakeHost -InputRoot $R.In -Name 'H1' -Files @{ 'r.csv' = $good } | Out-Null
         New-FakeHost -InputRoot $R.In -Name 'H2' -Behavior "EXIT=3`nCSV=r.csv`nSTDERR=[ERROR] some rules failed to load" -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS02' 'high' 'RuleB')) } | Out-Null
         New-FakeHost -InputRoot $R.In -Name 'H3' -Behavior "EXIT=2`nCSV=none`nSTDERR=fatal: cannot open" | Out-Null
-        New-FakeHost -InputRoot $R.In -Name 'H4' -Behavior "EXIT=0`nCSV=none" | Out-Null
+        # Hayabusa 4.2.0 does this for a --timeline-start it can't parse.
+        New-FakeHost -InputRoot $R.In -Name 'H4' -Behavior "EXIT=0`nCSV=none`nSTDERR=[ERROR] start-timeline field: the timestamp format is not correct." | Out-Null
         New-FakeHost -InputRoot $R.In -Name 'H6' -Files @{ 'r.csv' = @($TimelineHeader) } | Out-Null
+        # What Hayabusa writes when nothing matches: an empty file, no header.
+        New-FakeHost -InputRoot $R.In -Name 'H9' -Files @{ 'r.csv' = @() } | Out-Null
         New-FakeHost -InputRoot $R.In -Name 'H7' -Files @{ 'r.csv' = @('"Timestamp","RuleTitle"', '"a","b"') } | Out-Null
         New-FakeHost -InputRoot $R.In -Name 'HOST 08' -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS08' 'low' 'R')) } | Out-Null
         New-TestZip -Path (Join-TestPath $R.In 'H5.zip') -Entries ([ordered]@{
@@ -52,14 +55,14 @@ Describe 'Batch outcomes' {
         $script:rows = Get-ManifestRowMap $R
     }
 
-    It 'runs all eight, so one bad host does not stop the rest' {
-        $sum1.Processed | Should -Be 8
-        $calls1.Count | Should -Be 8
+    It 'runs all nine, so one bad host does not stop the rest' {
+        $sum1.Processed | Should -Be 9
+        $calls1.Count | Should -Be 9
     }
     It 'counts outcomes' {
         $sum1.Completed | Should -Be 5
         $sum1.CompletedWithErrors | Should -Be 1
-        $sum1.Failed | Should -Be 2
+        $sum1.Failed | Should -Be 3
         $sum1.Skipped | Should -Be 0
     }
     It 'exit 0 with a CSV: Completed with counts and Host from Computer' {
@@ -80,10 +83,16 @@ Describe 'Batch outcomes' {
         $rows.H3.Status | Should -Be 'Failed'
         $rows.H3.Error | Should -BeLike '*exited with code 2*No CSV was written.'
     }
-    It 'exit 0 without a CSV: Completed with zero counts and a warning' {
-        $rows.H4.Status | Should -Be 'Completed'
-        $rows.H4.Detections | Should -Be '0'
-        $rows.H4.Warning | Should -BeLike '*wrote no CSV*'
+    It 'exit 0 without a CSV: Failed, with Hayabusa''s error from stderr' {
+        $rows.H4.Status | Should -Be 'Failed'
+        $rows.H4.Error | Should -BeExactly "Hayabusa exited 0 but wrote no CSV: start-timeline field: the timestamp format is not correct. See $(Join-TestPath $R.Out 'H4' 'H4_hayabusa.log')."
+        $rows.H4.Warning | Should -Be ''
+    }
+    It 'exit 0 with an empty CSV: Completed with zero counts, no warning or error' {
+        $rows.H9.Status | Should -Be 'Completed'
+        $rows.H9.Detections | Should -Be '0'
+        $rows.H9.Warning | Should -Be ''
+        $rows.H9.Error | Should -Be ''
     }
     It 'no detections: Completed, zeros, Host blank' {
         $rows.H6.Status | Should -Be 'Completed'
@@ -120,8 +129,8 @@ Describe 'Batch outcomes' {
     It 'reruns skip Completed and CompletedWithErrors but retry Failed, keeping RunIds' {
         $sum2 = Invoke-TestBatch $R 'run2'
         $sum2.Skipped | Should -Be 6
-        $sum2.Processed | Should -Be 2
-        ((Get-FakeCall $R | Sort-Object) -join ',') | Should -Be 'H3,H7'
+        $sum2.Processed | Should -Be 3
+        ((Get-FakeCall $R | Sort-Object) -join ',') | Should -Be 'H3,H4,H7'
         $rows2 = Get-ManifestRowMap $R
         $rows2.H1.RunId | Should -Be 'run1'
         $rows2.H3.RunId | Should -Be 'run2'
@@ -134,8 +143,8 @@ Describe 'Batch outcomes' {
     }
     It '-Force reruns everything and clobbers the log' {
         $sum4 = Invoke-TestBatch $R 'run4' -Force
-        $sum4.Processed | Should -Be 8
-        (Get-FakeCall $R).Count | Should -Be 8
+        $sum4.Processed | Should -Be 9
+        (Get-FakeCall $R).Count | Should -Be 9
         @(Get-Content -LiteralPath (Join-TestPath $R.Out 'H1' 'H1_hayabusa.log') | Where-Object { $_ -like 'Exit code:*' }).Count | Should -Be 1
     }
 }

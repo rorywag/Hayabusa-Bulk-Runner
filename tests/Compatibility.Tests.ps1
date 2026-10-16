@@ -157,11 +157,14 @@ Describe 'Run verdicts' {
         $c = @(Test-CompatibilityRun -Name 'exclude-tag' -ExitCode 0 -CsvPath $emptyCsv -LogPath $okLog -Flag $flags -ExpectDetection $false -Filter '--exclude-tag attack.defense-evasion')
         $c[0].Passed | Should -BeTrue
     }
-    It 'fails exit 0 with no CSV at all' {
-        $c = @(Test-CompatibilityRun -Name 'x' -ExitCode 0 -CsvPath (Join-TestPath $vd 'missing.csv') -LogPath $okLog -Flag $flags)
+    It 'fails exit 0 with no CSV at all, giving Hayabusa''s error from stderr' {
+        $log = New-RunLog (Join-TestPath $vd 'nocsv.log') -Stderr @('[ERROR] start-timeline field: the timestamp format is not correct.')
+        $c = @(Test-CompatibilityRun -Name 'baseline' -ExitCode 0 -CsvPath (Join-TestPath $vd 'missing.csv') -LogPath $log -Flag $flags -ExpectDetection $true)
         $c.Count | Should -Be 1
         $c[0].Passed | Should -BeFalse
-        $c[0].Detail | Should -BeLike 'exit code 0 but no CSV was written*'
+        $c[0].Detail | Should -BeExactly "exit code 0 but no CSV was written, which the tool records as a failed host. Hayabusa said: start-timeline field: the timestamp format is not correct. Flags sent: dfir-timeline -d -m. Log: $log"
+        $c = @(Test-CompatibilityRun -Name 'x' -ExitCode 0 -CsvPath (Join-TestPath $vd 'missing.csv') -LogPath $okLog -Flag $flags)
+        $c[0].Detail | Should -BeLike '*no CSV was written*Hayabusa printed no error.*'
     }
     It 'names a missing column' {
         $c = Get-Check @(Test-CompatibilityRun -Name 'x' -ExitCode 0 -CsvPath $noTitleCsv -LogPath $okLog -Flag $flags) 'columns x'

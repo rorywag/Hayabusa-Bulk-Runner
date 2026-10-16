@@ -160,9 +160,9 @@ The manifest is the record of what's been done. On a rerun, hosts that are Compl
 
 | Status | Meaning |
 |---|---|
-| Completed | Hayabusa exited cleanly. No detections is still Completed |
+| Completed | Hayabusa exited cleanly and wrote a timeline. No detections is still Completed: Hayabusa writes an empty timeline when nothing matches |
 | CompletedWithErrors | Hayabusa exited non-zero but still wrote a timeline. Counts are kept and the exit code is in Error |
-| Failed | The input couldn't be prepared, Hayabusa wrote nothing, the results couldn't be read, or teardown failed. After a teardown failure, the manifest keeps the counts from a finished Hayabusa run, but the dashboard and triage CSVs leave them out, as they do for every Failed host |
+| Failed | The input couldn't be prepared, Hayabusa wrote no timeline, the results couldn't be read, or teardown failed. Hayabusa can stop on an error and still exit 0 without writing a timeline, so that's Failed too, with Hayabusa's own error message in Error. After a teardown failure, the manifest keeps the counts from a finished Hayabusa run, but the dashboard and triage CSVs leave them out, as they do for every Failed host |
 | Pending | Found but not run yet |
 | Running | Being run, or the run was interrupted |
 

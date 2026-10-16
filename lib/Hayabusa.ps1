@@ -265,6 +265,53 @@ function Invoke-HayabusaProcess {
     }
 }
 
+function Get-HayabusaLogStderr {
+    # The stderr lines Invoke-HayabusaProcess recorded in a run's log,
+    # without their [stderr] prefix.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$LogPath
+    )
+
+    if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) {
+        return [string[]]@()
+    }
+    $lines = @(Get-Content -LiteralPath $LogPath -Encoding UTF8 | Where-Object { $_ -like '`[stderr`] *' } | ForEach-Object { $_.Substring(9) })
+    return [string[]]$lines
+}
+
+function Get-HayabusaLogError {
+    <#
+    .SYNOPSIS
+        Hayabusa's own error message from a run's log, or null.
+    .DESCRIPTION
+        Hayabusa reports a failed run on stderr as "[ERROR] <message>",
+        sometimes with exit code 0. The [ERROR] lines are returned without
+        that prefix, or, if there are none, the other stderr lines, up to
+        three joined with " / ". Null when stderr was empty.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$LogPath
+    )
+
+    # PowerShell 7 records a blank native stderr line as the name of the
+    # exception type, so those are dropped with the blank ones.
+    $text = @(Get-HayabusaLogStderr -LogPath $LogPath | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 -and $_ -ne 'System.Management.Automation.RemoteException' })
+    $errors = @($text | ForEach-Object { if ($_ -match '^\[ERROR\]\s*(.+)$') { $Matches[1].Trim() } })
+    if ($errors.Count -gt 0) {
+        $text = $errors
+    }
+    if ($text.Count -eq 0) {
+        return $null
+    }
+    return (@($text | Select-Object -First 3) -join ' / ')
+}
+
 # Hayabusa 4.1.0 has no --version flag. The version is the banner line
 # printed by help, for example "Hayabusa v4.1.0 - Suzumushi Release".
 $script:VersionLinePattern = '^\s*Hayabusa v\d+\.\d+'
