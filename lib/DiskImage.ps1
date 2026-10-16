@@ -346,6 +346,36 @@ function Resolve-ImageVolume {
     return $chosen
 }
 
+function Get-ImageSha256 {
+    # The SHA-256 of an evidence image, read in full.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
+}
+
+function Format-ImageSize {
+    # "12.3 GB" or "512 MB", for the console line that warns a hash will
+    # take a while.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $bytes = [double](Get-Item -LiteralPath $Path -Force).Length
+    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($bytes -ge 1GB) {
+        return ('{0} GB' -f ($bytes / 1GB).ToString('0.0', $invariant))
+    }
+    return ('{0} MB' -f [math]::Ceiling($bytes / 1MB).ToString($invariant))
+}
+
 function Mount-CollectionImage {
     <#
     .SYNOPSIS
@@ -354,12 +384,16 @@ function Mount-CollectionImage {
     .DESCRIPTION
         1. Refuses if the parent image is already attached: it was not
            mounted by this run, so it is left alone.
-        2. Creates a differencing child at DiffRoot\<Collection>.<ext>, the
+        2. Hashes the parent with SHA-256, and adds a teardown step that
+           hashes it again once the child is dismounted and deleted. The
+           record of both is added to ImageHashRecord, if given, so the
+           caller has it even when the mount fails partway.
+        3. Creates a differencing child at DiffRoot\<Collection>.<ext>, the
            extension matching the parent. A leftover child from an earlier
            run is replaced, unless it is still attached.
-        3. Mounts the child read-write. The journal replays into the child
+        4. Mounts the child read-write. The journal replays into the child
            and the parent is never written.
-        4. Picks the volume through the disk association chain, uses the
+        5. Picks the volume through the disk association chain, uses the
            drive letter Windows assigns, and falls back to an empty folder
            under MountRoot attached with Add-PartitionAccessPath when no
            letter is assigned.
@@ -384,7 +418,10 @@ function Mount-CollectionImage {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [System.Collections.Generic.List[object]]$Teardown
+        [System.Collections.Generic.List[object]]$Teardown,
+
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.List[object]]$ImageHashRecord
     )
 
     Assert-MountSupported
@@ -410,6 +447,21 @@ function Mount-CollectionImage {
         Remove-DifferencingChild -Path $child -DiffRoot $DiffRoot
     }
 
+    # Hashed just before the child is created, and again by the teardown
+    # step once the child is dismounted and deleted.
+    $leaf = Split-Path -Path $ImagePath -Leaf
+    Write-Information "${Collection}: hashing $leaf ($(Format-ImageSize -Path $ImagePath)) with SHA-256 before mounting it. This reads the whole image, so a large one takes a while."
+    $record = [pscustomobject]@{
+        ImagePath = $ImagePath
+        Before    = (Get-ImageSha256 -Path $ImagePath)
+        After     = $null
+        Match     = $null
+    }
+    if ($null -ne $ImageHashRecord) {
+        $ImageHashRecord.Add($record)
+    }
+    Add-TeardownStep -Teardown $Teardown -Kind 'CheckImageHash' -Target $ImagePath -Record $record
+
     New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
     Add-TeardownStep -Teardown $Teardown -Kind 'RemoveDiffChild' -Target $child -Root $DiffRoot
 
@@ -424,6 +476,7 @@ function Mount-CollectionImage {
             DriveLetter = $volume.DriveLetter
             MountPath   = $null
             ChildPath   = $child
+            ImageHash   = $record
         }
     }
 
@@ -451,5 +504,6 @@ function Mount-CollectionImage {
         DriveLetter = $null
         MountPath   = $mountDir
         ChildPath   = $child
+        ImageHash   = $record
     }
 }

@@ -77,6 +77,11 @@ function Invoke-CollectionRun {
         CSV. With exit 0 that means Hayabusa stopped on an error, and its
         [ERROR] line from stderr goes in Error.
 
+        A disk image is hashed with SHA-256 before it is mounted and again
+        after teardown. If the two differ, the collection is Failed whatever
+        else happened, and the evidence integrity error leads its Error.
+        The hash record is returned as ImageHash.
+
         Any failure is caught and recorded, so one collection cannot stop
         the batch. If the run is interrupted the row stays Running and is
         picked up again next time.
@@ -129,6 +134,9 @@ function Invoke-CollectionRun {
     }
 
     $paths = Get-CollectionOutputPath -OutputRoot $OutputRoot -Collection $Collection.Collection
+    # Owned here, not by the resolved input, so a hash taken before a mount
+    # that then fails is still checked below.
+    $imageHashes = New-Object System.Collections.Generic.List[object]
     $resolvedInput = $null
     $summary = $null
     $exitCode = $null
@@ -160,7 +168,7 @@ function Invoke-CollectionRun {
 
         $resolvedInput = Resolve-CollectionInput -Collection $Collection -OutputRoot $OutputRoot `
             -MaxUncompressedBytes $Resolved.Limits.ZipMaxUncompressedBytes -MaxRatio $Resolved.Limits.ZipMaxRatio `
-            -KeepArtifacts:$KeepArtifacts
+            -KeepArtifacts:$KeepArtifacts -ImageHashRecord $imageHashes
         foreach ($w in @($resolvedInput.Warnings)) {
             $warnings.Add($w)
         }
@@ -209,6 +217,17 @@ function Invoke-CollectionRun {
         }
         catch {
             $errors.Add("Teardown: $($_.Exception.Message)")
+            $status = 'Failed'
+        }
+    }
+
+    # The image must read the same after the run as before it. If it does
+    # not, nothing else about this collection matters as much.
+    $imageHash = $null
+    if ($imageHashes.Count -gt 0) {
+        $imageHash = $imageHashes[0]
+        if ($imageHash.Match -eq $false) {
+            $errors.Insert(0, (Get-ImageHashMismatchMessage -Record $imageHash))
             $status = 'Failed'
         }
     }
@@ -275,7 +294,22 @@ function Invoke-CollectionRun {
         Errors      = $errors.ToArray()
         DurationSec = $timer.Elapsed.TotalSeconds
         OutputPath  = $paths.Directory
+        ImageHash   = $imageHash
     }
+}
+
+function Get-ImageHashMismatchMessage {
+    # The error for an image whose hash changed during the run. It starts
+    # with $script:EvidenceChangedPrefix, which the dashboard looks for.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Record
+    )
+
+    return ("{0}: the SHA-256 of {1} changed during this run, from {2} before it was mounted to {3} after teardown. The image was written to and can't be treated as unchanged. Stop and check it against your original hash before relying on it." -f
+        $script:EvidenceChangedPrefix, $Record.ImagePath, $Record.Before, $Record.After)
 }
 
 function Test-ZipUnreadable {
@@ -348,7 +382,9 @@ function Invoke-CollectionBatch {
         lines are warnings, except a ZIP already reported at startup as
         unreadable, which is not warned about twice.
 
-        Returns a summary of the counts by outcome.
+        Returns a summary of the counts by outcome. If ImageHash is given,
+        each processed collection's image hash record is stored in it by
+        collection name, null for a collection with no disk image.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -376,7 +412,9 @@ function Invoke-CollectionBatch {
         [string]$RunId,
 
         [switch]$Force,
-        [switch]$KeepArtifacts
+        [switch]$KeepArtifacts,
+
+        [System.Collections.IDictionary]$ImageHash
     )
 
     $existing = Get-RunManifest -Path $ManifestPath
@@ -416,6 +454,13 @@ function Invoke-CollectionBatch {
             $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Detections = 0; Errors = @("Unexpected error: $($_.Exception.Message)") }
         }
         $summary[$result.Status]++
+        if ($null -ne $ImageHash) {
+            $record = $null
+            if ($result.PSObject.Properties['ImageHash']) {
+                $record = $result.ImageHash
+            }
+            $ImageHash[$c.Collection] = $record
+        }
 
         $counted = Format-DetectionCount -Count $result.Detections
         if ($result.Status -eq 'Failed') {

@@ -216,6 +216,12 @@ if ($unreadableZips.Count -gt 0) {
 # Fail before anything is written if disk images need an elevated session.
 Assert-ElevationForContainer -Collections $collections
 
+# Each disk image is read in full twice, so say so before a long run starts.
+$imageCount = @($collections | Where-Object { $_.InputType -eq 'Vhd' -or $_.InputType -eq 'Vhdx' -or ($_.InputType -eq 'Zip' -and $null -ne $_.Zip -and $_.Zip.Readable -and @($_.Zip.ImageEntries).Count -gt 0) }).Count
+if ($imageCount -gt 0) {
+    Write-Information "$imageCount disk image(s) will be hashed with SHA-256 before mounting and again after teardown, to show each is unchanged. Each hash reads the whole image, so expect a pause on a large one. Hosts already finished are skipped and not hashed."
+}
+
 if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
     throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
 }
@@ -273,9 +279,11 @@ Write-Verbose "RunId $runId"
 Write-Verbose "Manifest: $manifestPath"
 Write-Verbose "Run metadata: $runMetaPath"
 
+$imageHashes = [ordered]@{}
 $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
     -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
-    -Force:$Force -KeepArtifacts:$KeepArtifacts
+    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes
+Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
 
 # A rollup failure is recorded and reported, and never hides the batch
 # results already in the manifest.

@@ -1,8 +1,10 @@
 # Teardown always runs in this order, whatever order the steps were added:
 # remove the folder mount point, dismount the differencing child, remove the
-# empty mount folder, delete the differencing child, then remove the extract.
-# The parent image is never touched.
-$script:TeardownOrder = @('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'RemoveExtract')
+# empty mount folder, delete the differencing child, hash the parent image
+# again, then remove the extract. The parent image is only read. For an
+# image extracted from a ZIP, the hash comes before the extract it sits in
+# is removed.
+$script:TeardownOrder = @('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'CheckImageHash', 'RemoveExtract')
 
 # Steps skipped under -KeepArtifacts. The image is always dismounted.
 $script:KeptArtifactKinds = @('RemoveDiffChild', 'RemoveExtract')
@@ -19,7 +21,7 @@ function Add-TeardownStep {
         [System.Collections.Generic.List[object]]$Teardown,
 
         [Parameter(Mandatory)]
-        [ValidateSet('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'RemoveExtract')]
+        [ValidateSet('RemoveAccessPath', 'Dismount', 'RemoveMountFolder', 'RemoveDiffChild', 'CheckImageHash', 'RemoveExtract')]
         [string]$Kind,
 
         [Parameter(Mandatory)]
@@ -27,7 +29,10 @@ function Add-TeardownStep {
 
         [string]$Root,
         [int]$DiskNumber = -1,
-        [int]$PartitionNumber = -1
+        [int]$PartitionNumber = -1,
+
+        # The image hash record a CheckImageHash step fills in.
+        [object]$Record
     )
 
     $Teardown.Add([pscustomobject]@{
@@ -36,6 +41,7 @@ function Add-TeardownStep {
             Root            = $Root
             DiskNumber      = $DiskNumber
             PartitionNumber = $PartitionNumber
+            Record          = $Record
             Done            = $false
         })
 }
@@ -108,9 +114,14 @@ function Invoke-CollectionCleanup {
     .DESCRIPTION
         Runs in a fixed order: remove the folder mount point, dismount the
         differencing child, remove the empty mount folder, delete the
-        differencing child, remove the extract. With KeepArtifacts the
-        differencing child and extract stay on disk, but the image is
-        always dismounted.
+        differencing child, hash the parent image again, remove the
+        extract. With KeepArtifacts the differencing child and extract stay
+        on disk, but the image is always dismounted and hashed.
+
+        The second hash goes in the step's record, with Match set to
+        whether it equals the first. A mismatch is not a teardown error:
+        the caller reads the record and fails the collection. The hash is
+        not taken while the image may still be mounted.
 
         If removing the mount point or dismounting fails, the mount folder,
         differencing child and extract are left in place, since the image
@@ -141,6 +152,10 @@ function Invoke-CollectionCleanup {
                 $step.Done = $true
                 continue
             }
+            if ($kind -eq 'CheckImageHash' -and $mountStillActive) {
+                $errors.Add("Did not check the SHA-256 of $($step.Target) after the run, because the image may still be mounted.")
+                continue
+            }
             if ($script:NeedsDismountKinds -contains $kind -and $mountStillActive) {
                 $errors.Add("Left $($step.Target) in place because an image may still be mounted.")
                 continue
@@ -159,6 +174,11 @@ function Invoke-CollectionCleanup {
                     }
                     'RemoveDiffChild' {
                         Remove-DifferencingChild -Path $step.Target -DiffRoot $step.Root
+                    }
+                    'CheckImageHash' {
+                        Write-Information "$($Resolved.Collection): hashing $(Split-Path -Path $step.Target -Leaf) again to check it is unchanged."
+                        $step.Record.After = Get-ImageSha256 -Path $step.Target
+                        $step.Record.Match = ($step.Record.After -eq $step.Record.Before)
                     }
                     'RemoveExtract' {
                         Remove-CollectionExtract -Path $step.Target -WorkRoot $step.Root
@@ -232,8 +252,10 @@ function Resolve-CollectionInput {
         level is unpacked.
 
         Returns Collection, Source, InputType, SourcePath, Path, ImagePath,
-        ChildPath, ExtractPath, MountPath, Warnings, Teardown and
-        KeepArtifacts.
+        ChildPath, ExtractPath, MountPath, ImageHash, Warnings, Teardown and
+        KeepArtifacts. ImageHash is the mounted image's hash record, also
+        added to ImageHashRecord if given, so the caller still has it when
+        resolution fails after the image was hashed.
         Warnings holds what was found at resolve time. Discovery warnings
         stay on the discovered collection.
 
@@ -256,7 +278,10 @@ function Resolve-CollectionInput {
         [Parameter(Mandatory)]
         [double]$MaxRatio,
 
-        [switch]$KeepArtifacts
+        [switch]$KeepArtifacts,
+
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.List[object]]$ImageHashRecord
     )
 
     $workRoot = Join-Path -Path $OutputRoot -ChildPath '_work'
@@ -275,6 +300,7 @@ function Resolve-CollectionInput {
         ChildPath     = $null
         ExtractPath   = $null
         MountPath     = $null
+        ImageHash     = $null
         Warnings      = $warnings
         Teardown      = $teardown
         KeepArtifacts = $KeepArtifacts.IsPresent
@@ -287,8 +313,9 @@ function Resolve-CollectionInput {
                 $result.Path = $Collection.SourcePath
             }
             { $_ -eq 'Vhd' -or $_ -eq 'Vhdx' } {
-                $mount = Mount-CollectionImage -ImagePath $Collection.SourcePath -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown
+                $mount = Mount-CollectionImage -ImagePath $Collection.SourcePath -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown -ImageHashRecord $ImageHashRecord
                 $result.ImagePath = $Collection.SourcePath
+                $result.ImageHash = $mount.ImageHash
                 $result.ChildPath = $mount.ChildPath
                 $result.MountPath = $mount.MountPath
                 $result.Path = $mount.Path
@@ -327,8 +354,9 @@ function Resolve-CollectionInput {
                     if ($evtx.Count -gt 0) {
                         $warnings.Add("Skipped evidence: $($evtx.Count) loose evtx file(s) beside the disk image were not processed.")
                     }
-                    $mount = Mount-CollectionImage -ImagePath $images[0].FullName -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown
+                    $mount = Mount-CollectionImage -ImagePath $images[0].FullName -MountRoot $mountRoot -DiffRoot $diffRoot -Collection $Collection.Collection -Teardown $teardown -ImageHashRecord $ImageHashRecord
                     $result.ImagePath = $images[0].FullName
+                    $result.ImageHash = $mount.ImageHash
                     $result.ChildPath = $mount.ChildPath
                     $result.MountPath = $mount.MountPath
                     $result.Path = $mount.Path

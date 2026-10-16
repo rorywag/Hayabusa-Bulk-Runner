@@ -5,7 +5,8 @@
 #
 # The image is built fresh, so it is clean, unlike a KAPE image taken from a
 # live host. This checks the mechanism: the parent is never written, the
-# differencing child is removed, and nothing is left attached.
+# differencing child is removed, nothing is left attached, and the tool's own
+# before-and-after hash in run-meta matches the test's.
 
 BeforeDiscovery {
     $script:canMount = $false
@@ -76,6 +77,9 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
         finally {
             Invoke-CollectionCleanup -Resolved $r
         }
+        $r.ImageHash.Before | Should -BeExactly $parentHash
+        $r.ImageHash.After | Should -BeExactly $parentHash
+        $r.ImageHash.Match | Should -BeTrue
         Test-Path -LiteralPath $r.ChildPath | Should -BeFalse
         Test-ImageAttached -ImagePath $parent | Should -BeFalse
         (Get-FileHash -LiteralPath $parent -Algorithm SHA256).Hash | Should -Be $parentHash
@@ -92,5 +96,10 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
         @(Get-ChildItem -LiteralPath (Join-TestPath $out '_diff') -Force -ErrorAction SilentlyContinue).Count | Should -Be 0
         Test-ImageAttached -ImagePath $parent | Should -BeFalse
         (Get-FileHash -LiteralPath $parent -Algorithm SHA256).Hash | Should -Be $parentHash
+        $entry = @((Get-Content -LiteralPath $r.RunMetaPath -Raw | ConvertFrom-Json).Collections | Where-Object { $_.Collection -eq 'HOST01' })[0]
+        $entry.ImagePath | Should -Be $parent
+        $entry.ImageSha256Before | Should -BeExactly $parentHash
+        $entry.ImageSha256After | Should -BeExactly $parentHash
+        $entry.ImageHashMatch | Should -BeTrue
     }
 }

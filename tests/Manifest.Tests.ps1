@@ -141,6 +141,34 @@ Describe 'Run metadata files' {
     }
 }
 
+Describe 'Image hash in run-meta' {
+    It 'records both hashes and the match per collection, null where there was no image' {
+        $meta = [ordered]@{
+            Collections = @(
+                [ordered]@{ Collection = 'IMG'; Source = 'IMG.vhdx'; InputType = 'Vhdx'; ImagePath = $null; ImageSha256Before = $null; ImageSha256After = $null; ImageHashMatch = $null }
+                [ordered]@{ Collection = 'LOOSE'; Source = 'LOOSE'; InputType = 'Loose'; ImagePath = $null; ImageSha256Before = $null; ImageSha256After = $null; ImageHashMatch = $null }
+                [ordered]@{ Collection = 'SKIPPED'; Source = 'SKIPPED.vhdx'; InputType = 'Vhdx'; ImagePath = $null; ImageSha256Before = $null; ImageSha256After = $null; ImageHashMatch = $null }
+            )
+        }
+        $hashes = [ordered]@{
+            IMG   = [pscustomobject]@{ ImagePath = 'D:\Evidence\IMG.vhdx'; Before = 'A' * 64; After = 'A' * 64; Match = $true }
+            LOOSE = $null
+        }
+        Set-RunMetaImageHash -RunMeta $meta -ImageHash $hashes
+        $p = Join-TestPath $TestDrive 'hash-meta.json'
+        Save-RunMeta -Path $p -RunMeta $meta | Out-Null
+        $c = @((Get-Content -LiteralPath $p -Raw | ConvertFrom-Json).Collections)
+        $c[0].ImagePath | Should -Be 'D:\Evidence\IMG.vhdx'
+        $c[0].ImageSha256Before | Should -BeExactly ('A' * 64)
+        $c[0].ImageSha256After | Should -BeExactly ('A' * 64)
+        $c[0].ImageHashMatch | Should -BeTrue
+        foreach ($entry in $c[1], $c[2]) {
+            $entry.ImageSha256Before | Should -BeNullOrEmpty
+            $entry.ImageHashMatch | Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe 'Path helpers' {
     It 'strips trailing separators and keeps drive roots' {
         $d = New-TestDirectory (Join-TestPath $TestDrive 'norm')

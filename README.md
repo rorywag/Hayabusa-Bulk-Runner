@@ -23,7 +23,7 @@ The console during the same run:
 - Builds a cross-host dashboard: totals by severity, the rules that fired and the hosts each one hit, and every host ranked worst first.
 - Reads the host name from Hayabusa's own `Computer` field, so loose output that KAPE named after a drive still lands under the right host.
 - Resumes a case. Run the same command again and it skips the hosts already finished and picks up the rest.
-- Treats the evidence as read-only the whole way through, and proves it with a before-and-after hash of each image.
+- Treats the evidence as read-only the whole way through. Each disk image is hashed with SHA-256 before it's mounted and again after teardown, both hashes go in the run's record, and a host whose image changed fails.
 - Takes an engagement config so every host in a case runs against the same settings.
 
 ## Status
@@ -76,10 +76,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 The evidence is only ever read.
 
-- Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool mounts a differencing disk under `OutputRoot\_diff` with the evidence image as its parent. Windows replays the journal into the child and the parent is only read, checked on KAPE output with the parent's hash the same before and after.
+- Disk images are never mounted directly. KAPE images are dirty when they're created, so a read-only mount shows no volume at all. Instead the tool mounts a differencing disk under `OutputRoot\_diff` with the evidence image as its parent. Windows replays the journal into the child and the parent is only read.
+- Every run checks that. Each disk image is hashed with SHA-256 just before its differencing disk is created, and again once the differencing disk is dismounted and deleted. For an image inside a ZIP, the hash is of the extracted image that gets mounted. Both hashes and whether they match are recorded per host in the run's record under `OutputRoot\_runs`. If they differ, the host is Failed with an "Evidence integrity check failed" error naming both hashes, and the dashboard leads with it. Each hash reads the whole image, so a large image adds a noticeable pause before and after its host. Loose folders, and ZIPs with no disk image in them, aren't hashed.
 - An image that's already attached is refused, not reused or dismounted, since this run didn't attach it.
 - ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
-- After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point. The tool only deletes inside its own `_work`, `_mnt` and `_diff` folders, plus a host's own previous report and timeline just before that host is rerun. If a dismount fails, everything after it is left in place and the error says what's still there.
+- After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, hash the image again, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point. The tool only deletes inside its own `_work`, `_mnt` and `_diff` folders, plus a host's own previous report and timeline just before that host is rerun. If a dismount fails, everything after it is left in place and the error says what's still there.
 - OutputRoot is refused if its path is inside InputRoot, so output doesn't land next to the evidence.
 - Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out.
 

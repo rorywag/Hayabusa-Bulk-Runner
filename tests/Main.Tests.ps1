@@ -127,7 +127,7 @@ Describe 'A run' {
     }
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
-        $m1.SchemaVersion | Should -Be 6
+        $m1.SchemaVersion | Should -Be 7
         # Compared with $ToolVersion as the script sets it, so a release needs no test change.
         $toolVersion = [regex]::Match([System.IO.File]::ReadAllText($MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
         $toolVersion | Should -Match '^\d+\.\d+\.\d+$'
@@ -154,6 +154,16 @@ Describe 'A run' {
         $rows1[0].Source | Should -BeExactly 'HOST 02'
         $m1.Summary.Discovered | Should -Be 2
         @($m1.Collections).Count | Should -Be 2
+    }
+    It 'records no image hash for a loose collection, and no hashing notice' {
+        foreach ($c in @($m1.Collections)) {
+            $c.InputType | Should -Be 'Loose'
+            foreach ($f in 'ImagePath', 'ImageSha256Before', 'ImageSha256After', 'ImageHashMatch') {
+                $c.PSObject.Properties.Name | Should -Contain $f
+                $c.$f | Should -BeNullOrEmpty
+            }
+        }
+        @($info1 | Where-Object { $_ -like '*hashed with SHA-256*' }).Count | Should -Be 0
     }
     It 'builds the rollup and records it in run-meta' {
         Test-Path -LiteralPath (Join-TestPath $out 'triage_dashboard.html') | Should -BeTrue

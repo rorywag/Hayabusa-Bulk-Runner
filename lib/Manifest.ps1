@@ -18,6 +18,10 @@ $script:ManifestColumns = @(
     'Timestamp'
 )
 
+# Starts the Error of a collection whose disk image hashed differently after
+# the run than before it. The batch writes it and the dashboard looks for it.
+$script:EvidenceChangedPrefix = 'Evidence integrity check failed'
+
 # Free-text columns. Host and Warning are built from the evidence's Computer
 # values, Source is the operator's raw entry name, Collection may start with
 # a hyphen, and Error can quote any of them. These are escaped against CSV
