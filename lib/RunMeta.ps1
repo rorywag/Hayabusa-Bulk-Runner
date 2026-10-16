@@ -37,10 +37,12 @@ function New-RunMeta {
     .DESCRIPTION
         Filled from the resolved settings, the collections discovered for
         this run, the version line from hayabusa help stored verbatim, and the
-        rule set's newest file and count. CompletedUtc, Summary and Rollup
-        are set when the batch and rollup finish, and each collection's
-        image hash fields by Set-RunMetaImageHash. Nothing is written to
-        disk here.
+        rule set's newest file and count. Summary and each collection's
+        image hash fields are filled in as each host finishes, so an
+        interrupted run's record keeps the hosts it got through.
+        CompletedUtc and Rollup are set when the batch and rollup finish,
+        so a record whose CompletedUtc is null is from a run that did not
+        finish. Nothing is written to disk here.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
     [CmdletBinding()]
@@ -187,7 +189,9 @@ function Save-RunMeta {
     .DESCRIPTION
         A new file is created with CreateNew, so an existing run's record is
         never overwritten. Use -Update to rewrite the current run's own file,
-        for example to set CompletedUtc.
+        after each host and to set CompletedUtc. An update goes through a
+        temporary file swapped into place, so a run interrupted mid-write
+        keeps the previous record whole.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([string])]
@@ -217,7 +221,7 @@ function Save-RunMeta {
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
             throw "Cannot update run metadata that does not exist: $Path"
         }
-        [System.IO.File]::WriteAllText($Path, $json, $encoding)
+        Write-TextFileAtomic -Path $Path -Text $json
         return $Path
     }
 
