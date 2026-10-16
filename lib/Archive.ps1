@@ -333,9 +333,11 @@ function Get-ZipEntryInfo {
         .NET cannot extract it. The rule is the same on Windows PowerShell
         5.1 and PowerShell 7. A central directory that cannot be parsed is
         unreadable too (ReadReason Unparseable), never assumed fine. An
-        entry name holding a character no Windows path can use, such as |
-        or a control character, makes it unreadable as well (ReadReason
-        BadName). A ZIP that passes but that .NET still cannot open is
+        entry name Windows can't hold, by the same rules extraction uses,
+        such as one with a | or ?, a colon, a trailing dot or a reserved
+        device name, makes it unreadable as well (ReadReason BadName). A
+        name that could write outside the extraction folder is left to
+        extraction, which refuses the archive as unsafe. A ZIP that passes but that .NET still cannot open is
         ReadReason Corrupt.
 
         Unreadable ZIPs are reported, not thrown, so discovery can guide the
@@ -371,11 +373,20 @@ function Get-ZipEntryInfo {
     }
 
     # Checked before anything else looks at the names, so one odd entry
-    # fails this ZIP alone and can never stop discovery.
-    $badNames = @($directory.Entries | Where-Object { $_.Name -match '[\x00-\x1F"<>|]' })
+    # fails this ZIP alone and can never stop discovery. These are the same
+    # rules extraction applies to names Windows can't hold, so such a ZIP is
+    # listed at the start instead of failing mid-batch. A traversal name is
+    # left to extraction, which refuses the archive as unsafe.
+    $badNames = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $directory.Entries) {
+        $problem = Get-ZipEntryNameProblem -Name $e.Name
+        if ($null -ne $problem -and -not $problem.Traversal) {
+            $badNames.Add([pscustomobject]@{ Name = $e.Name; Reason = $problem.Reason })
+        }
+    }
     if ($badNames.Count -gt 0) {
         $shown = $badNames[0].Name -replace '[\x00-\x1F]', '?'
-        $why = "entry '$shown' holds a character Windows can't use in a path"
+        $why = "entry '$shown' has a name Windows can't use: $($badNames[0].Reason)"
         if ($badNames.Count -gt 1) {
             $why += ", and $($badNames.Count - 1) more entr(ies) have the same problem"
         }
@@ -508,13 +519,79 @@ function Get-ZipGuidance {
     return "$Source can't be extracted by this tool ($(Get-ZipReadReasonText -Info $Info)). $advice"
 }
 
+function Get-ZipEntryNameProblem {
+    <#
+    .SYNOPSIS
+        Says what is wrong with an entry name, or returns null if it is safe.
+    .DESCRIPTION
+        Returns Reason and Traversal. Traversal is true for a name that could
+        write outside the target folder: absolute, UNC or drive-qualified,
+        or with a parent directory segment. Those are checked first, so a
+        name that is both is always treated as traversal. Otherwise the name
+        is only one Windows can't hold or would read differently from its
+        literal name: a colon, which Windows takes as an alternate data
+        stream, a character not valid in a file name, a segment ending in a
+        dot or space, or a reserved device name.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Name
+    )
+
+    $n = $Name.Replace('\', '/')
+    $segments = @($n.Split('/') | Where-Object { $_.Length -gt 0 })
+
+    $traversal = $null
+    if ($n.StartsWith('/')) {
+        $traversal = 'absolute or UNC path'
+    }
+    elseif ($n -match '^[A-Za-z]:') {
+        $traversal = 'drive-qualified path'
+    }
+    elseif ($segments -contains '..') {
+        $traversal = 'parent directory segment'
+    }
+    if ($null -ne $traversal) {
+        return [pscustomobject]@{ Reason = $traversal; Traversal = $true }
+    }
+
+    $windows = $null
+    if ($n.Contains(':')) {
+        $windows = 'colon in name (alternate data stream)'
+    }
+    elseif ($n -match '[\x00-\x1F<>"|?*]') {
+        $windows = 'character not valid in a Windows file name'
+    }
+    else {
+        foreach ($segment in $segments) {
+            if (($segment.EndsWith('.') -or $segment.EndsWith(' ')) -and $segment -ne '.') {
+                $windows = 'segment ends with a dot or space'
+                break
+            }
+            $stem = $segment.Split('.')[0]
+            if ($stem -match '^(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+                $windows = 'reserved device name'
+                break
+            }
+        }
+    }
+    if ($null -ne $windows) {
+        return [pscustomobject]@{ Reason = $windows; Traversal = $false }
+    }
+    return $null
+}
+
 function Test-ZipEntryName {
     <#
     .SYNOPSIS
         Returns the reason an entry name is unsafe to extract, or null if it is safe.
     .DESCRIPTION
         Rejects anything that could write outside the target folder or that
-        Windows would interpret differently from its literal name.
+        Windows would interpret differently from its literal name. See
+        Get-ZipEntryNameProblem.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -524,40 +601,11 @@ function Test-ZipEntryName {
         [string]$Name
     )
 
-    $n = $Name.Replace('\', '/')
-
-    if ($n.StartsWith('/')) {
-        return 'absolute or UNC path'
+    $problem = Get-ZipEntryNameProblem -Name $Name
+    if ($null -eq $problem) {
+        return $null
     }
-    if ($n -match '^[A-Za-z]:') {
-        return 'drive-qualified path'
-    }
-    if ($n.Contains(':')) {
-        return 'colon in name (alternate data stream)'
-    }
-    if ($n -match '[\x00-\x1F<>"|?*]') {
-        return 'character not valid in a Windows file name'
-    }
-
-    foreach ($segment in $n.Split('/')) {
-        if ($segment.Length -eq 0) {
-            continue
-        }
-        if ($segment -eq '..') {
-            return 'parent directory segment'
-        }
-        if ($segment.EndsWith('.') -or $segment.EndsWith(' ')) {
-            if ($segment -ne '.') {
-                return 'segment ends with a dot or space'
-            }
-        }
-        $stem = $segment.Split('.')[0]
-        if ($stem -match '^(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
-            return 'reserved device name'
-        }
-    }
-
-    return $null
+    return $problem.Reason
 }
 
 function Get-SafeEntryTarget {
@@ -611,12 +659,17 @@ function Assert-ZipArchiveSafe {
         [long]$MaxUncompressedBytes,
 
         [Parameter(Mandatory)]
-        [double]$MaxRatio
+        [double]$MaxRatio,
+
+        # The ZIP's name, for the message about names Windows can't hold.
+        [string]$Source = 'The ZIP'
     )
 
     $total = [long]0
     $compressed = [long]0
     $problems = New-Object System.Collections.Generic.List[string]
+    $windowsNames = New-Object System.Collections.Generic.List[string]
+    $images = New-Object System.Collections.Generic.List[string]
     $pathTooLong = $null
 
     foreach ($entry in $Archive.Entries) {
@@ -626,9 +679,17 @@ function Assert-ZipArchiveSafe {
         if ($entry.FullName.Length -eq 0) {
             continue
         }
-        $reason = Test-ZipEntryName -Name $entry.FullName
-        if ($null -ne $reason) {
-            $problems.Add("'$($entry.FullName)': $reason")
+        if (Test-DiskImageName -Name $entry.FullName) {
+            $images.Add($entry.FullName)
+        }
+        $problem = Get-ZipEntryNameProblem -Name $entry.FullName
+        if ($null -ne $problem) {
+            if ($problem.Traversal) {
+                $problems.Add("'$($entry.FullName)': $($problem.Reason)")
+            }
+            else {
+                $windowsNames.Add("'$($entry.FullName)': $($problem.Reason)")
+            }
             continue
         }
         try {
@@ -655,8 +716,16 @@ function Assert-ZipArchiveSafe {
     }
 
     if ($problems.Count -gt 0) {
-        $shown = @($problems | Select-Object -First 10) -join '; '
-        throw "Archive refused, $($problems.Count) unsafe entry name(s): $shown"
+        # Traversal, with any Windows-only problems listed alongside.
+        $all = @($problems) + @($windowsNames)
+        $shown = @($all | Select-Object -First 10) -join '; '
+        throw "Archive refused, $($all.Count) unsafe entry name(s): $shown"
+    }
+    if ($windowsNames.Count -gt 0) {
+        # Not an attack, just names Windows can't hold. Discovery normally
+        # finds these first. The same guidance, with the detail in verbose.
+        Write-Verbose "${Source}: $(@($windowsNames | Select-Object -First 10) -join '; ')"
+        throw (Get-ZipGuidance -Source $Source -Info ([pscustomobject]@{ ReadReason = 'BadName'; ImageEntries = $images.ToArray() }))
     }
 
     if ($total -gt $MaxUncompressedBytes) {
@@ -831,7 +900,7 @@ function Expand-ZipArchiveSafe {
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     $created = $false
     try {
-        $declared = Assert-ZipArchiveSafe -Archive $archive -Destination $Destination -MaxUncompressedBytes $MaxUncompressedBytes -MaxRatio $MaxRatio
+        $declared = Assert-ZipArchiveSafe -Archive $archive -Destination $Destination -MaxUncompressedBytes $MaxUncompressedBytes -MaxRatio $MaxRatio -Source ([System.IO.Path]::GetFileName($Path))
 
         $parent = Split-Path -Path $Destination -Parent
         $free = Get-FreeSpace -Path $parent

@@ -179,4 +179,17 @@ Describe 'A ZIP entry name Windows cannot use in a path' {
         @($odd.Warnings)[0] | Should -BeExactly "ODD.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
         @($c | Where-Object { $_.Collection -eq 'GOOD' }).Count | Should -Be 1
     }
+    It 'catches <Label> at the start too, the names that used to fail mid-batch' -ForEach @(
+        @{ Label = 'a question mark'; Entry = 'C/Windows/a?b.evtx' }
+        @{ Label = 'a colon'; Entry = 'C/Windows/a.evtx:Zone.Identifier' }
+        @{ Label = 'a trailing dot'; Entry = 'C/Windows./a.evtx' }
+        @{ Label = 'a reserved device name'; Entry = 'C/Windows/nul.evtx' }
+    ) {
+        $root = New-TestDirectory (Join-TestPath $TestDrive ('start' + [guid]::NewGuid().ToString('N')))
+        New-TestZip -Path (Join-TestPath $root 'ODD.zip') -Entries ([ordered]@{ $Entry = 'synthetic' }) | Out-Null
+        $odd = @(Get-InputCollection -InputRoot $root -WarningAction SilentlyContinue)[0]
+        $odd.Zip.Readable | Should -BeFalse
+        $odd.Zip.ReadReason | Should -Be 'BadName'
+        @($odd.Warnings)[0] | Should -BeExactly "ODD.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+    }
 }

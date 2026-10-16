@@ -14,11 +14,6 @@ Describe 'Zip slip' {
         @{ Case = 'absolute'; Entry = '/abs.txt' }
         @{ Case = 'UNC'; Entry = '\\server\share\x.txt' }
         @{ Case = 'drive'; Entry = 'C:/x.txt' }
-        @{ Case = 'alternate data stream'; Entry = 'file.txt:hidden' }
-        @{ Case = 'device folder'; Entry = 'CON/x.txt' }
-        @{ Case = 'device name'; Entry = 'logs/aux.evtx' }
-        @{ Case = 'wildcard'; Entry = 'bad?.txt' }
-        @{ Case = 'trailing dot'; Entry = 'trail./x.txt' }
     ) {
         $zp = New-TestZip -Path (Join-TestPath $zd ("slip{0}.zip" -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ 'ok/fine.evtx' = (New-TestByteArray 10 -Random); $Entry = (New-TestByteArray 10 -Random) })
         $dest = Join-TestPath $zd ('x' + [guid]::NewGuid().ToString('N'))
@@ -29,6 +24,51 @@ Describe 'Zip slip' {
     It 'passes ordinary names' {
         Test-ZipEntryName -Name 'C/Windows/System32/winevt/Logs/Microsoft-Windows-Sysmon%4Operational.evtx' | Should -BeNullOrEmpty
         Test-ZipEntryName -Name './a/b.evtx' | Should -BeNullOrEmpty
+    }
+    It 'treats a name that is both traversal and illegal on Windows as traversal' {
+        $p = Get-ZipEntryNameProblem -Name '../a?b.txt'
+        $p.Traversal | Should -BeTrue
+        $p.Reason | Should -Be 'parent directory segment'
+    }
+    It 'still refuses the whole archive as unsafe when traversal sits beside a name Windows can''t hold' {
+        $zp = New-TestZip -Path (Join-TestPath $zd 'mixed.zip') -Entries ([ordered]@{ '../evil.txt' = 'x'; 'bad?.txt' = 'y' })
+        $m = Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $zd 'mixed') -MaxUncompressedBytes 1GB -MaxRatio 250 }
+        $m | Should -BeExactly "Archive refused, 2 unsafe entry name(s): '../evil.txt': parent directory segment; 'bad?.txt': character not valid in a Windows file name"
+        (Get-ZipEntryInfo -Path $zp).ReadReason | Should -Be 'BadName'
+    }
+}
+
+Describe 'Names Windows can''t hold' {
+    BeforeAll { $script:wn = New-TestDirectory (Join-TestPath $TestDrive 'winnames') }
+
+    It 'lists <Case> (<Entry>) at discovery, and extraction gives the same guidance, writing nothing' -ForEach @(
+        @{ Case = 'alternate data stream'; Entry = 'C/Users/x/file.txt:Zone.Identifier'; Reason = 'colon in name (alternate data stream)' }
+        @{ Case = 'device folder'; Entry = 'CON/x.txt'; Reason = 'reserved device name' }
+        @{ Case = 'device name'; Entry = 'logs/aux.evtx'; Reason = 'reserved device name' }
+        @{ Case = 'wildcard'; Entry = 'bad?.txt'; Reason = 'character not valid in a Windows file name' }
+        @{ Case = 'star'; Entry = 'logs/a*b.evtx'; Reason = 'character not valid in a Windows file name' }
+        @{ Case = 'trailing dot'; Entry = 'trail./x.txt'; Reason = 'segment ends with a dot or space' }
+        @{ Case = 'trailing space'; Entry = 'trail /x.txt'; Reason = 'segment ends with a dot or space' }
+    ) {
+        $zp = New-TestZip -Path (Join-TestPath $wn ("w{0}.zip" -f [guid]::NewGuid().ToString('N'))) -Entries ([ordered]@{ 'ok/fine.evtx' = (New-TestByteArray 10 -Random); $Entry = (New-TestByteArray 10 -Random) })
+        $info = Get-ZipEntryInfo -Path $zp
+        $info.Readable | Should -BeFalse
+        $info.ReadReason | Should -Be 'BadName'
+        $info.ReadError | Should -BeExactly "entry '$Entry' has a name Windows can't use: $Reason"
+        $leaf = Split-Path -Leaf $zp
+        $guidance = "$leaf can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted folder in InputRoot, and rerun."
+        Get-ZipGuidance -Source $leaf -Info $info | Should -BeExactly $guidance
+        $dest = Join-TestPath $wn ('x' + [guid]::NewGuid().ToString('N'))
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination $dest -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeExactly $guidance
+        Test-Path -LiteralPath $dest | Should -BeFalse
+    }
+    It 'points at the disk image when the ZIP holds one' {
+        $zp = New-TestZip -Path (Join-TestPath $wn 'img.zip') -Entries ([ordered]@{ 'Container/HOST09.vhdx' = 'img'; 'notes:x' = 'y' })
+        Get-ThrownMessage { Expand-ZipArchiveSafe -Path $zp -Destination (Join-TestPath $wn 'img') -MaxUncompressedBytes 1GB -MaxRatio 250 } | Should -BeExactly "img.zip can't be extracted by this tool (an entry name isn't valid on Windows). Extract it yourself, put the extracted disk image (HOST09.vhdx) directly in InputRoot, and rerun."
+    }
+    It 'leaves traversal names to extraction, which refuses them as unsafe' {
+        $zp = New-TestZip -Path (Join-TestPath $wn 'trav.zip') -Entries ([ordered]@{ 'a/../../evil.txt' = 'x' })
+        (Get-ZipEntryInfo -Path $zp).Readable | Should -BeTrue
     }
 }
 
