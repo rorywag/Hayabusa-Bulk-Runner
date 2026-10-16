@@ -52,6 +52,17 @@ Describe 'Checks before anything is written' {
         Get-ThrownMessage { & $MainScript -InputRoot $in -OutputRoot (Join-TestPath $in 'results') -HayabusaPath $hb } | Should -BeLike '*must not be inside InputRoot*'
         Test-Path -LiteralPath (Join-TestPath $in 'results') | Should -BeFalse
     }
+    It 'refuses an InputRoot inside OutputRoot, such as a kept _diff folder, leaving it untouched' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'case-out')
+        $kept = New-TestDirectory (Join-TestPath $o '_diff')
+        $image = Write-TestText -Path (Join-TestPath $kept 'HOST01.vhdx') -Line @('evidence')
+        $before = (Get-FileHash -LiteralPath $image).Hash
+        $m = Get-ThrownMessage { & $MainScript -InputRoot $kept -OutputRoot $o -HayabusaPath $hb }
+        $m | Should -BeLike "InputRoot ($kept) must not be inside OutputRoot ($o).*"
+        (Get-FileHash -LiteralPath $image).Hash | Should -Be $before
+        Test-Path -LiteralPath (Join-TestPath $o 'run_manifest.csv') | Should -BeFalse
+        Test-Path -LiteralPath (Join-TestPath $o '_runs') | Should -BeFalse
+    }
     It 'stops on a missing rules folder and writes nothing' {
         $tool2 = New-TestDirectory (Join-TestPath $TestDrive 'tool2')
         $hb2 = Write-TestText -Path (Join-TestPath $tool2 'hayabusa.exe') -Line @('x')

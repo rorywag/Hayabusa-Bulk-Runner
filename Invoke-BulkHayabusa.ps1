@@ -39,7 +39,7 @@
 
 .PARAMETER OutputRoot
     Where per-host output, the manifest, run metadata and the rollup are
-    written. Created if missing. Must not be inside InputRoot.
+    written. Created if missing. Must not be inside InputRoot, or hold it.
 
 .PARAMETER HayabusaPath
     Full path to hayabusa.exe.
@@ -128,7 +128,7 @@ if ($Help) {
         ''
         'Required:'
         '  -InputRoot      Parent folder holding one entry per host'
-        '  -OutputRoot     Where everything is written. Created if missing. Must not be inside InputRoot'
+        '  -OutputRoot     Where everything is written. Created if missing. Must not be inside InputRoot, or hold it'
         '  -HayabusaPath   Full path to hayabusa.exe'
         ''
         'Options:'
@@ -167,6 +167,12 @@ $HayabusaPath = ConvertTo-NormalizedPath -Path $HayabusaPath
 
 if (Test-PathIsWithin -Path $OutputRoot -Parent $InputRoot) {
     throw "OutputRoot ($OutputRoot) must not be inside InputRoot ($InputRoot). Output would be picked up as a host and written next to evidence."
+}
+# The reverse too: the tool creates and deletes files under OutputRoot, so
+# evidence there, such as an image in a _diff folder kept by -KeepArtifacts,
+# could share a path with a differencing disk it is about to clear.
+if (Test-PathIsWithin -Path $InputRoot -Parent $OutputRoot) {
+    throw "InputRoot ($InputRoot) must not be inside OutputRoot ($OutputRoot). The tool creates and deletes files under OutputRoot, so evidence there could be deleted. Move the evidence out of OutputRoot, or choose a different OutputRoot."
 }
 
 # Settings

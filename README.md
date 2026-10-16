@@ -81,7 +81,7 @@ The evidence is only ever read.
 - An image that's already attached is refused, not reused or dismounted, since this run didn't attach it.
 - ZIPs are extracted to a working copy under `OutputRoot\_work`. The ZIP itself is only read.
 - After each host, teardown runs in a fixed order, whatever happened: remove the folder mount point if one was used, dismount the child, remove the empty mount folder, delete the child, hash the image again, delete the extract. Nothing is ever deleted recursively through a folder that might still be a mount point. The tool only deletes inside its own `_work`, `_mnt` and `_diff` folders, plus a host's own previous report and timeline just before that host is rerun. If a dismount fails, everything after it is left in place and the error says what's still there.
-- OutputRoot is refused if its path is inside InputRoot, so output doesn't land next to the evidence.
+- OutputRoot is refused if its path is inside InputRoot, so output doesn't land next to the evidence. InputRoot is refused if its path is inside OutputRoot, since the tool creates and deletes files there. Pointing InputRoot at a `_diff` folder kept by `-KeepArtifacts`, for example, would let an evidence image share the path of a differencing disk the tool is about to clear.
 - Nothing from the evidence is ever run. Values from it, such as rule titles and computer names, are encoded wherever they're written out.
 
 ## Documentation

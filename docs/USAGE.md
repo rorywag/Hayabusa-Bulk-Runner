@@ -16,7 +16,7 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 | Parameter | What it does |
 |---|---|
 | `-InputRoot` | Parent folder holding one entry per host |
-| `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot |
+| `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot, or hold it |
 | `-HayabusaPath` | Full path to `hayabusa.exe` |
 | `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default medium |
 | `-Threads` | Passed to Hayabusa. Leave it out to let Hayabusa decide |
