@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-16
+
 ### Added
 
 - Each disk image is hashed with SHA-256 just before its differencing disk is created and again after the differencing disk is dismounted and deleted. An image inside a ZIP is hashed as the extracted image that gets mounted. Both hashes and whether they match are recorded per host in run-meta, as `ImagePath`, `ImageSha256Before`, `ImageSha256After` and `ImageHashMatch` on each collection. Run-meta's SchemaVersion is now 7. If the hashes differ, the host is Failed with an "Evidence integrity check failed" error naming both, and the dashboard leads with a red notice. Each hash reads the whole image, so a large image adds a pause before and after its host, and the run says so at the start and before each hash. The README claimed this before-and-after hash, but only the integration tests took it.
@@ -98,7 +100,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.6.3...v0.7.0
