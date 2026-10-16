@@ -18,6 +18,8 @@
 #             the CSV. When SAMPLE_LEVEL is set, -m, -e, --include-tag and
 #             --exclude-tag are applied to it, and a run that drops it gets
 #             an empty CSV, as Hayabusa writes when nothing matches.
+#             The summary line "Events with hits / Total events" reports
+#             EVENTS= events read, 1 by default, the sample's count.
 
 $argv = @($args | ForEach-Object { [string]$_ })
 $esc = [char]27
@@ -91,7 +93,7 @@ if (-not [string]::IsNullOrEmpty($env:FAKE_CALLS) -and $null -ne $inputPath) {
     [System.IO.File]::AppendAllText($env:FAKE_CALLS, $inputPath + [Environment]::NewLine)
 }
 
-$behavior = @{ EXIT = '0'; CSV = 'none'; HTML = 'stub'; STDERR = ''; SAMPLE_LEVEL = ''; SAMPLE_TAGS = '' }
+$behavior = @{ EXIT = '0'; CSV = 'none'; HTML = 'stub'; STDERR = ''; SAMPLE_LEVEL = ''; SAMPLE_TAGS = ''; EVENTS = '1' }
 if ($null -ne $inputPath) {
     $behaviorFile = Join-Path -Path $inputPath -ChildPath 'fake.behavior'
     if (Test-Path -LiteralPath $behaviorFile) {
@@ -126,6 +128,9 @@ if ($behavior.CSV -ne 'none' -and $null -ne $csvPath) {
         [System.IO.File]::WriteAllText($csvPath, '')
     }
 }
+$hits = 0
+if ($detected -and $behavior.CSV -ne 'none') { $hits = 1 }
+[Console]::Out.WriteLine("Events with hits / Total events: $hits / $($behavior.EVENTS) (Data reduction: 0 events (0.00%))")
 if ($behavior.HTML -ne 'none' -and $null -ne $htmlPath) {
     [System.IO.File]::WriteAllText($htmlPath, '<html></html>')
 }

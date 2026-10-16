@@ -17,8 +17,8 @@ BeforeAll {
     $script:hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
     $script:rules = Join-TestPath $TestDrive 'tool' 'rules'
 
-    function script:New-RunLog([string]$Path, [string[]]$Stderr = @(), [int]$Exit = 0) {
-        $lines = @('Started (UTC): 2026-10-13T00:00:00Z', 'Binary: hayabusa.exe', 'Arguments:', '  dfir-timeline', '--- output ---', 'Results Summary:')
+    function script:New-RunLog([string]$Path, [string[]]$Stderr = @(), [int]$Exit = 0, [string[]]$Stdout = @()) {
+        $lines = @('Started (UTC): 2026-10-13T00:00:00Z', 'Binary: hayabusa.exe', 'Arguments:', '  dfir-timeline', '--- output ---', 'Results Summary:') + @($Stdout)
         $lines += @($Stderr | ForEach-Object { "[stderr] $_" })
         $lines += @('--- end ---', "Exit code: $Exit")
         Write-TestText -Path $Path -Line $lines
@@ -157,6 +157,23 @@ Describe 'Run verdicts' {
         $c = @(Test-CompatibilityRun -Name 'exclude-tag' -ExitCode 0 -CsvPath $emptyCsv -LogPath $okLog -Flag $flags -ExpectDetection $false -Filter '--exclude-tag attack.defense-evasion')
         $c[0].Passed | Should -BeTrue
     }
+    It 'reads the sample''s event count from the baseline log' {
+        $ok = New-RunLog (Join-TestPath $vd 'events-ok.log') -Stdout @('Events with hits / Total events: 1 / 1 (Data reduction: 0 events (0.00%))')
+        $c = Test-CompatibilitySample -ExitCode 0 -LogPath $ok
+        $c.Name | Should -Be 'sample'
+        $c.Passed | Should -BeTrue
+        $many = New-RunLog (Join-TestPath $vd 'events-many.log') -Stdout @('Events with hits / Total events: 3 / 1,204 (Data reduction: 0 events (0.00%))')
+        (Test-CompatibilitySample -ExitCode 0 -LogPath $many).Detail | Should -BeLike 'Hayabusa read 1204 event(s) from the sample, not 1.*'
+        # As Hayabusa 4.2.0 writes it when it read nothing.
+        $none = New-RunLog (Join-TestPath $vd 'events-none.log') -Stdout @('Results Summary:Events with hits / Total events: 0 / 0 (Data reduction: 0 events (0.00%))')
+        (Test-CompatibilitySample -ExitCode 0 -LogPath $none).Detail | Should -BeLike 'Hayabusa read 0 event(s) from the sample, not 1.*'
+    }
+    It 'fails a baseline log with no event count, and says nothing when the baseline run failed' {
+        $c = Test-CompatibilitySample -ExitCode 0 -LogPath $okLog
+        $c.Passed | Should -BeFalse
+        $c.Detail | Should -BeLike "the baseline log has no 'Total events' count*The release may have changed its summary output*"
+        Test-CompatibilitySample -ExitCode 2 -LogPath $okLog | Should -BeNullOrEmpty
+    }
     It 'fails exit 0 with no CSV at all, giving Hayabusa''s error from stderr' {
         $log = New-RunLog (Join-TestPath $vd 'nocsv.log') -Stderr @('[ERROR] start-timeline field: the timestamp format is not correct.')
         $c = @(Test-CompatibilityRun -Name 'baseline' -ExitCode 0 -CsvPath (Join-TestPath $vd 'missing.csv') -LogPath $log -Flag $flags -ExpectDetection $true)
@@ -279,7 +296,7 @@ Describe 'The whole check with the fake Hayabusa' {
         $r = Invoke-FakeCheck 'pass' "EXIT=0`nCSV=r.csv`nSAMPLE_LEVEL=high`nSAMPLE_TAGS=attack.defense-evasion,attack.t1070.001" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
         @($r.Checks | Where-Object { -not $_.Passed } | ForEach-Object { "$($_.Name): $($_.Detail)" }) | Should -BeNullOrEmpty
         $r.ExitCode | Should -Be 0
-        @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag', 'levels')
+        @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'sample', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag', 'levels')
         foreach ($n in 'run exact-level', 'run include-other', 'run exclude-tag') {
             (Get-Check $r.Checks $n).Detail | Should -BeLike 'accepted, no detections (empty CSV)*'
         }
@@ -306,6 +323,13 @@ Describe 'The whole check with the fake Hayabusa' {
             $c.Passed | Should -BeFalse -Because "$name still detected the sample"
             $c.Detail | Should -BeLike "accepted, but the sample was still detected (1 detection(s)), so $($expected[$name]) was not applied.*"
         }
+    }
+    It 'fails, blaming the sample and not the release, when Hayabusa read none of it' {
+        $r = Invoke-FakeCheck 'unread' "EXIT=0`nCSV=r.csv`nEVENTS=0" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
+        $r.ExitCode | Should -Be 1
+        $c = Get-Check $r.Checks 'sample'
+        $c.Passed | Should -BeFalse
+        $c.Detail | Should -BeLike "Hayabusa read 0 event(s) from the sample, not 1. The sample event log this check builds is at fault, not the Hayabusa release*New-CompatibilitySampleEvtx*"
     }
     It 'fails when a filter drops the sample from a run that should detect it' {
         $r = Invoke-FakeCheck 'overfilter' "EXIT=0`nCSV=r.csv`nSAMPLE_LEVEL=high`nSAMPLE_TAGS=attack.t1070.001" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }

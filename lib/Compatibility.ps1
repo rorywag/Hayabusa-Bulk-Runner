@@ -19,6 +19,14 @@ $script:CompatibilitySampleTag = 'attack.defense-evasion'
 # sample's detection.
 $script:CompatibilityOtherTag = 'attack.impact'
 
+# The sample holds this many events, and Hayabusa's summary in each run's
+# log reports how many it read, for example
+# "Events with hits / Total events: 1 / 1 (Data reduction: 0 events (0.00%))".
+# Hayabusa 4.2.0 prints it on the same line as "Results Summary:" when it
+# read no events, so the pattern is not anchored to the start of the line.
+$script:CompatibilitySampleEventCount = 1
+$script:TotalEventsPattern = 'Events with hits / Total events:\s*([\d,]+)\s*/\s*([\d,]+)'
+
 # The time window passed in the check, with the sample event inside it.
 $script:CompatibilityTimelineStart = '2026-01-01 00:00:00 +00:00'
 $script:CompatibilityTimelineEnd = '2026-12-31 23:59:59 +00:00'
@@ -604,6 +612,51 @@ function Test-CompatibilityRun {
     }
 }
 
+function Test-CompatibilitySample {
+    <#
+    .SYNOPSIS
+        Checks Hayabusa read the generated sample, from the baseline run's log.
+    .DESCRIPTION
+        Hayabusa's summary gives the number of events it read. If that is
+        not the sample's event count, the sample this check builds is at
+        fault, not the release, and the other results can't be trusted: a
+        sample Hayabusa can't parse would look like a release whose rule no
+        longer fires. Returns nothing when the baseline run failed, since
+        its own check already says why. A run that exited 0 without the
+        summary line fails, as the release may have changed its output.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$ExitCode,
+
+        [Parameter(Mandatory)]
+        [string]$LogPath
+    )
+
+    if ($ExitCode -ne 0) {
+        return
+    }
+    $expected = $script:CompatibilitySampleEventCount
+    $total = $null
+    if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+        foreach ($line in @(Get-Content -LiteralPath $LogPath -Encoding UTF8)) {
+            $m = [regex]::Match($line, $script:TotalEventsPattern)
+            if ($m.Success) {
+                $total = [long]($m.Groups[2].Value -replace ',', '')
+            }
+        }
+    }
+    if ($null -eq $total) {
+        return (New-CompatibilityCheck -Name 'sample' -Passed $false -Detail "the baseline log has no 'Total events' count, so it can't be confirmed that Hayabusa read the sample. The release may have changed its summary output. Log: $LogPath")
+    }
+    if ($total -ne $expected) {
+        return (New-CompatibilityCheck -Name 'sample' -Passed $false -Detail "Hayabusa read $total event(s) from the sample, not $expected. The sample event log this check builds is at fault, not the Hayabusa release, and the other results can't be trusted until it reads: see New-CompatibilitySampleEvtx in lib\Compatibility.ps1. Log: $LogPath")
+    }
+    return (New-CompatibilityCheck -Name 'sample' -Passed $true -Detail "Hayabusa read the sample's $expected event")
+}
+
 function Test-CompatibilityLevel {
     <#
     .SYNOPSIS
@@ -735,6 +788,7 @@ function Invoke-HayabusaCompatibilityCheck {
     $sent = New-Object System.Collections.Generic.List[string]
     $runChecks = New-Object System.Collections.Generic.List[object]
     $csvPaths = New-Object System.Collections.Generic.List[string]
+    $sampleCheck = $null
 
     foreach ($run in @(Get-CompatibilityRunPlan -RulesPath $RulesPath)) {
         $runDir = Join-Path -Path $WorkingDirectory -ChildPath $run.Name
@@ -756,9 +810,15 @@ function Invoke-HayabusaCompatibilityCheck {
             $runChecks.Add($c)
         }
         $csvPaths.Add($csv)
+        if ($run.Name -eq 'baseline') {
+            $sampleCheck = Test-CompatibilitySample -ExitCode $exit -LogPath $log
+        }
     }
 
     $checks.Add((Test-CompatibilityFlagCoverage -SentFlag $sent.ToArray() -EmittableFlag $emittable))
+    if ($null -ne $sampleCheck) {
+        $checks.Add($sampleCheck)
+    }
     foreach ($c in $runChecks) {
         $checks.Add($c)
     }
