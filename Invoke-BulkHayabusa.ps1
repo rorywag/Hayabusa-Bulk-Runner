@@ -288,7 +288,7 @@ Write-Verbose "Run metadata: $runMetaPath"
 $imageHashes = [ordered]@{}
 $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
     -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
-    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes
+    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes -RunMeta $runMeta -RunMetaPath $runMetaPath
 Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
 
 # A rollup failure is recorded and reported, and never hides the batch

@@ -385,6 +385,12 @@ function Invoke-CollectionBatch {
         Returns a summary of the counts by outcome. If ImageHash is given,
         each processed collection's image hash record is stored in it by
         collection name, null for a collection with no disk image.
+
+        If RunMeta and RunMetaPath are given, the run's record is rewritten
+        after each processed collection, with the counts so far and every
+        image hash taken so far, so an interrupted run loses nothing about
+        the hosts it finished. A failed write is warned about and the batch
+        carries on.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -414,8 +420,17 @@ function Invoke-CollectionBatch {
         [switch]$Force,
         [switch]$KeepArtifacts,
 
-        [System.Collections.IDictionary]$ImageHash
+        [System.Collections.IDictionary]$ImageHash,
+
+        [System.Collections.IDictionary]$RunMeta,
+
+        [string]$RunMetaPath
     )
+
+    # Hashes are needed to update run-meta, even if the caller asked for none.
+    if ($null -ne $RunMeta -and $null -eq $ImageHash) {
+        $ImageHash = [ordered]@{}
+    }
 
     $existing = Get-RunManifest -Path $ManifestPath
     $summary = [ordered]@{
@@ -460,6 +475,16 @@ function Invoke-CollectionBatch {
                 $record = $result.ImageHash
             }
             $ImageHash[$c.Collection] = $record
+        }
+        if ($null -ne $RunMeta -and -not [string]::IsNullOrEmpty($RunMetaPath)) {
+            try {
+                Set-RunMetaImageHash -RunMeta $RunMeta -ImageHash $ImageHash
+                $RunMeta['Summary'] = $summary
+                Save-RunMeta -Path $RunMetaPath -RunMeta $RunMeta -Update | Out-Null
+            }
+            catch {
+                Write-Warning "$($c.Collection): could not update the run metadata at ${RunMetaPath}: $($_.Exception.Message)"
+            }
         }
 
         $counted = Format-DetectionCount -Count $result.Detections

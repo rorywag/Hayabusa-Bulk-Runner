@@ -511,3 +511,79 @@ Describe 'Evidence image hash' {
         $box.Contains('IMGOK') | Should -BeFalse
     }
 }
+
+Describe 'Run-meta after each host' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:R = New-BatchRoot 'runmeta-per-host'
+        foreach ($n in 'IMG1', 'IMG2') {
+            New-FakeHost -InputRoot $R.In -Name $n -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS01' 'high' 'RuleA')) } | Out-Null
+        }
+        $script:hash1 = 'C' * 64
+        $script:metaPath = Get-RunMetaPath -OutputRoot $R.Out -StartedUtc (Get-Date).ToUniversalTime() -RunId 'run1'
+        $cols = @(Get-InputCollection -InputRoot $R.In -WarningAction SilentlyContinue)
+        $script:meta = [ordered]@{
+            SchemaVersion = 7
+            RunId         = 'run1'
+            StartedUtc    = '2026-10-16T00:00:00Z'
+            CompletedUtc  = $null
+            Summary       = $null
+            Selection     = [ordered]@{ MinLevel = 'medium'; ExactLevel = $null; Profile = 'standard' }
+            Collections   = @($cols | ForEach-Object { [ordered]@{ Collection = $_.Collection; Source = $_.Source; InputType = 'Vhdx'; ImagePath = $null; ImageSha256Before = $null; ImageSha256After = $null; ImageHashMatch = $null } })
+        }
+        Save-RunMeta -Path $metaPath -RunMeta $meta | Out-Null
+
+        # The mount is simulated as in the image hash tests. When IMG2 starts,
+        # IMG1 has finished but the run has not: the record on disk at that
+        # point is what an interrupt there would leave.
+        $script:midRun = $null
+        $script:midRollup = $null
+        Mock Resolve-CollectionInput {
+            if ($Collection.Collection -eq 'IMG2') {
+                $script:midRun = Get-Content -LiteralPath $script:metaPath -Raw | ConvertFrom-Json
+                $script:midRollup = Get-RollupData -OutputRoot $script:R.Out -WarningAction SilentlyContinue
+            }
+            $record = [pscustomobject]@{ ImagePath = "D:\Evidence\$($Collection.Collection).vhdx"; Before = $script:hash1; After = $script:hash1; Match = $true }
+            $ImageHashRecord.Add($record)
+            [pscustomobject]@{
+                Collection = $Collection.Collection; Source = $Collection.Source; InputType = 'Vhdx'; SourcePath = $Collection.SourcePath
+                Path = $Collection.SourcePath; ImagePath = $record.ImagePath; ChildPath = $null; ExtractPath = $null; MountPath = $null
+                ImageHash = $record; Warnings = (New-Object System.Collections.Generic.List[string]); Teardown = (New-Object System.Collections.Generic.List[object]); KeepArtifacts = $false
+            }
+        }
+        Invoke-CollectionBatch -Collections $cols -ManifestPath $R.Manifest -OutputRoot $R.Out -HayabusaPath $hb -Resolved $resolved -Threads $null -RunId 'run1' -RunMeta $meta -RunMetaPath $metaPath -WarningAction SilentlyContinue | Out-Null
+        $script:final = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+    }
+
+    It 'has a finished host''s image hashes on disk before the run ends' {
+        $midRun | Should -Not -BeNullOrEmpty
+        $img1 = @($midRun.Collections | Where-Object { $_.Collection -eq 'IMG1' })[0]
+        $img1.ImagePath | Should -Be 'D:\Evidence\IMG1.vhdx'
+        $img1.ImageSha256Before | Should -BeExactly $hash1
+        $img1.ImageSha256After | Should -BeExactly $hash1
+        $img1.ImageHashMatch | Should -BeTrue
+    }
+    It 'marks that record as from an unfinished run, with the counts so far and nothing yet for the next host' {
+        $midRun.CompletedUtc | Should -BeNullOrEmpty
+        $midRun.Summary.Processed | Should -Be 1
+        $midRun.Summary.Completed | Should -Be 1
+        $img2 = @($midRun.Collections | Where-Object { $_.Collection -eq 'IMG2' })[0]
+        $img2.ImageSha256Before | Should -BeNullOrEmpty
+        $img2.ImageHashMatch | Should -BeNullOrEmpty
+    }
+    It 'leaves a record the rollup can read mid-run' {
+        $midRollup | Should -Not -BeNullOrEmpty
+        $p = @($midRollup.Provenance | Where-Object { $_.RunId -eq 'run1' })
+        $p.Count | Should -Be 1
+        $p[0].Found | Should -BeTrue
+        $p[0].StartedUtc | Should -Be '2026-10-16T00:00:00Z'
+        $p[0].Floor | Should -Be 'min medium'
+    }
+    It 'has both hosts once the batch ends, and no temporary file left behind' {
+        foreach ($n in 'IMG1', 'IMG2') {
+            @($final.Collections | Where-Object { $_.Collection -eq $n })[0].ImageHashMatch | Should -BeTrue
+        }
+        $final.Summary.Processed | Should -Be 2
+        Test-Path -LiteralPath "$metaPath.tmp" | Should -BeFalse
+    }
+}

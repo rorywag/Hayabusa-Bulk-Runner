@@ -151,14 +151,14 @@ Some folders under OutputRoot belong to the tool:
 
 | Folder | What it's for |
 |---|---|
-| `_runs` | One provenance record per run, written when the run starts and completed when it ends, and never overwritten by a later run. Together they show what every row in the manifest was produced with |
+| `_runs` | One provenance record per run, written when the run starts, updated as each host finishes and completed when it ends, and never overwritten by a later run. Together they show what every row in the manifest was produced with |
 | `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, unless `-KeepArtifacts` is given, so after a clean run without it this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
 | `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
 | `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
 ### Run-meta
 
-Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts and completes it when it ends. Under `Collections` it lists every collection the run found, with these fields:
+Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. Under `Collections` it lists every collection the run found, with these fields:
 
 | Field | What it holds |
 |---|---|
