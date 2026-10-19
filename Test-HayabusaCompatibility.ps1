@@ -15,6 +15,9 @@
     Then it checks, and prints PASS or FAIL for each:
 
     - version: the version line is read from hayabusa help
+    - profiles: the output profiles listed in config\profiles.yaml beside
+      the binary can be read, with the ones the tool accepts, those whose
+      columns include Level, Computer and RuleTitle
     - flag coverage: every flag the tool can emit was sent at least once
     - sample: Hayabusa read the sample's one event, from the baseline
       run's summary. A FAIL here means the generated sample is at fault,

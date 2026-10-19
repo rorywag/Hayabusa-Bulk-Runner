@@ -657,6 +657,41 @@ function Test-CompatibilitySample {
     return (New-CompatibilityCheck -Name 'sample' -Passed $true -Detail "Hayabusa read the sample's $expected event")
 }
 
+function Test-CompatibilityProfile {
+    <#
+    .SYNOPSIS
+        Checks the binary's list of output profiles can be read, and which
+        of them the tool accepts.
+    .DESCRIPTION
+        Reads config\profiles.yaml beside the binary the same way a real
+        run does. Passes when it reads and standard and verbose, the
+        profiles the runs here use, are among those accepted. The detail
+        lists every profile accepted and every one refused, with the column
+        each refused one lacks, taken from its own headers.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$HayabusaPath
+    )
+
+    $set = Get-HayabusaProfileSet -HayabusaPath $HayabusaPath
+    if (-not $set.Read) {
+        return (New-CompatibilityCheck -Name 'profiles' -Passed $false -Detail "could not read $($set.Path) ($($set.Error)), so a run would only allow standard and verbose")
+    }
+    $refused = @($set.Unusable.Keys | ForEach-Object { "$_ (no $($set.Unusable[$_] -join ', '))" })
+    $detail = "accepted: $($set.Usable -join ', ')"
+    if ($refused.Count -gt 0) {
+        $detail += ". Refused, missing a column the dashboard needs: $($refused -join ', ')"
+    }
+    $needed = @('standard', 'verbose' | Where-Object { $set.Usable -notcontains $_ })
+    if ($needed.Count -gt 0) {
+        return (New-CompatibilityCheck -Name 'profiles' -Passed $false -Detail "$($needed -join ' and ') would be refused, and the default and these runs use them. A$($detail.Substring(1))")
+    }
+    return (New-CompatibilityCheck -Name 'profiles' -Passed $true -Detail $detail)
+}
+
 function Test-CompatibilityLevel {
     <#
     .SYNOPSIS
@@ -777,6 +812,7 @@ function Invoke-HayabusaCompatibilityCheck {
 
     $version = Get-HayabusaVersion -HayabusaPath $HayabusaPath
     $checks.Add((Test-CompatibilityVersion -HayabusaVersion $version))
+    $checks.Add((Test-CompatibilityProfile -HayabusaPath $HayabusaPath))
 
     $sampleDir = Join-Path -Path $WorkingDirectory -ChildPath 'sample'
     if (-not (Test-Path -LiteralPath $sampleDir -PathType Container)) {

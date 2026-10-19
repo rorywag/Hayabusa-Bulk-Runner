@@ -296,7 +296,7 @@ Describe 'The whole check with the fake Hayabusa' {
         $r = Invoke-FakeCheck 'pass' "EXIT=0`nCSV=r.csv`nSAMPLE_LEVEL=high`nSAMPLE_TAGS=attack.defense-evasion,attack.t1070.001" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
         @($r.Checks | Where-Object { -not $_.Passed } | ForEach-Object { "$($_.Name): $($_.Detail)" }) | Should -BeNullOrEmpty
         $r.ExitCode | Should -Be 0
-        @($r.Checks.Name) | Should -Be @('version', 'flag coverage', 'sample', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag', 'levels')
+        @($r.Checks.Name) | Should -Be @('version', 'profiles', 'flag coverage', 'sample', 'run baseline', 'columns baseline', 'run exact-tag', 'columns exact-tag', 'run exact-level', 'run include-other', 'run exclude-tag', 'levels')
         foreach ($n in 'run exact-level', 'run include-other', 'run exclude-tag') {
             (Get-Check $r.Checks $n).Detail | Should -BeLike 'accepted, no detections (empty CSV)*'
         }
@@ -323,6 +323,21 @@ Describe 'The whole check with the fake Hayabusa' {
             $c.Passed | Should -BeFalse -Because "$name still detected the sample"
             $c.Detail | Should -BeLike "accepted, but the sample was still detected (1 detection(s)), so $($expected[$name]) was not applied.*"
         }
+    }
+    It 'lists the profiles the tool accepts and refuses, from the binary''s profiles.yaml' {
+        $c = Test-CompatibilityProfile -HayabusaPath $hb
+        $c.Passed | Should -BeTrue
+        $c.Detail | Should -BeExactly 'accepted: minimal, standard, verbose, all-field-info, all-field-info-verbose, super-verbose. Refused, missing a column the dashboard needs: timesketch-minimal (no RuleTitle), timesketch-verbose (no RuleTitle)'
+    }
+    It 'fails the profiles check when the list can''t be read, or drops standard or verbose' {
+        $d = New-TestDirectory (Join-TestPath $TestDrive 'noprofiles')
+        $c = Test-CompatibilityProfile -HayabusaPath (Join-TestPath $d 'hayabusa.exe')
+        $c.Passed | Should -BeFalse
+        $c.Detail | Should -BeLike '*profiles.yaml (the file is not there), so a run would only allow standard and verbose'
+        Write-TestText -Path (Join-TestPath $d 'config' 'profiles.yaml') -Line @('standard:', '    Level: "%Level%"', '    Computer: "%Computer%"', '    RuleTitle: "%RuleTitle%"', 'verbose:', '    Level: "%Level%"', '    Computer: "%Computer%"') | Out-Null
+        $c = Test-CompatibilityProfile -HayabusaPath (Join-TestPath $d 'hayabusa.exe')
+        $c.Passed | Should -BeFalse
+        $c.Detail | Should -BeExactly 'verbose would be refused, and the default and these runs use them. Accepted: standard. Refused, missing a column the dashboard needs: verbose (no RuleTitle)'
     }
     It 'fails, blaming the sample and not the release, when Hayabusa read none of it' {
         $r = Invoke-FakeCheck 'unread' "EXIT=0`nCSV=r.csv`nEVENTS=0" @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'COMPAT-TEST' 'high' 'Log Cleared')) }
