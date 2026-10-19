@@ -1,0 +1,65 @@
+# Synthetic stand-in for config/profiles.yaml beside hayabusa.exe. Same
+# layout as Hayabusa 4.2.0's: one profile per top-level key, one output
+# column per indented "Header: value" line.
+minimal:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    Details: "%Details%"
+
+standard:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    Channel: "%Channel%"
+    EventID: "%EventID%"
+    Details: "%Details%"
+
+verbose:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    MitreTactics: "%MitreTactics%"
+    Details: "%Details%"
+
+all-field-info:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    AllFieldInfo: "%AllFieldInfo%"
+
+all-field-info-verbose:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    MitreTags: "%MitreTags%"
+    AllFieldInfo: "%AllFieldInfo%"
+
+super-verbose:
+    Timestamp: "%Timestamp%"
+    RuleTitle: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    RuleAuthor: "%RuleAuthor%"
+    Details: "%Details%"
+
+# RuleTitle is carried, but under the header message.
+timesketch-minimal:
+    datetime: "%Timestamp%"
+    timestamp_desc: "hayabusa"
+    message: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+
+timesketch-verbose:
+    datetime: "%Timestamp%"
+    timestamp_desc: "hayabusa"
+    message: "%RuleTitle%"
+    Level: "%Level%"
+    Computer: "%Computer%"
+    MitreTags: "%MitreTags%"

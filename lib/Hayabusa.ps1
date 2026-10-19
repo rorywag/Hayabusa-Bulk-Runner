@@ -427,6 +427,174 @@ function Get-HayabusaVersionNotice {
     return "Hayabusa $number is not the version this tool was tested with ($script:TestedHayabusaVersion). Run Test-HayabusaCompatibility.ps1 against it to check the flags, output columns and severity levels this tool relies on."
 }
 
+# The columns every triage view reads from a Hayabusa CSV. An output profile
+# is only usable if its column headers include all three.
+$script:ProfileRequiredColumns = @('Level', 'Computer', 'RuleTitle')
+
+# Used when config\profiles.yaml beside hayabusa.exe can't be read: the two
+# profiles every Hayabusa release this tool has been checked against offers.
+$script:FallbackOutputProfiles = @('standard', 'verbose')
+
+function Read-HayabusaProfileFile {
+    <#
+    .SYNOPSIS
+        Reads the profile names and their column headers from a Hayabusa
+        profiles.yaml.
+    .DESCRIPTION
+        The file is a top-level key per profile, each with one indented
+        "Header: value" line per output column, for example
+        'RuleTitle: "%RuleTitle%"'. Only the header, the left side, is
+        kept, since the CSV's column names are the headers: a profile can
+        carry %RuleTitle% as a value under a header with another name,
+        which the triage views can't read. Comments and blank lines are
+        skipped. Anything else is not a format this
+        reader knows, so it throws rather than guess. Returns an ordered
+        dictionary of profile name to its headers.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $profiles = [ordered]@{}
+    $current = $null
+    $lineNumber = 0
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $lineNumber++
+        $text = $line.TrimEnd()
+        if ($text.Length -eq 0 -or $text.TrimStart().StartsWith('#')) {
+            continue
+        }
+        $profileMatch = [regex]::Match($text, '^([A-Za-z0-9][A-Za-z0-9_.-]*):$')
+        if ($profileMatch.Success) {
+            $current = New-Object System.Collections.Generic.List[string]
+            $profiles[$profileMatch.Groups[1].Value] = $current
+            continue
+        }
+        $columnMatch = [regex]::Match($text, '^\s+("?)([^":#]+)\1:\s*(\S.*)?$')
+        if ($columnMatch.Success -and $null -ne $current) {
+            $current.Add($columnMatch.Groups[2].Value.Trim())
+            continue
+        }
+        throw "line $lineNumber is not a profile name or an indented column: $text"
+    }
+    if ($profiles.Count -eq 0) {
+        throw 'it defines no profiles'
+    }
+
+    $result = [ordered]@{}
+    foreach ($name in $profiles.Keys) {
+        $result[$name] = [string[]]$profiles[$name].ToArray()
+    }
+    return $result
+}
+
+function Get-HayabusaProfileSet {
+    <#
+    .SYNOPSIS
+        The output profiles a Hayabusa binary offers, and which of them the
+        triage views can read.
+    .DESCRIPTION
+        Reads config\profiles.yaml from the folder beside HayabusaPath. A
+        profile is usable if its column headers include Level, Computer and
+        RuleTitle. The others are listed in Unusable with the columns they
+        lack. If the file is missing or can't be read, Read is false, Error
+        says why, and only standard and verbose are usable, as before this
+        list was read from the binary.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$HayabusaPath
+    )
+
+    $path = Join-Path -Path (Join-Path -Path (Split-Path -Path $HayabusaPath -Parent) -ChildPath 'config') -ChildPath 'profiles.yaml'
+    $set = [pscustomobject]@{
+        Path     = $path
+        Read     = $false
+        Error    = $null
+        Usable   = [string[]]$script:FallbackOutputProfiles
+        Unusable = [ordered]@{}
+    }
+
+    $profiles = $null
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $set.Error = 'the file is not there'
+        return $set
+    }
+    try {
+        $profiles = Read-HayabusaProfileFile -Path $path
+    }
+    catch {
+        $set.Error = $_.Exception.Message
+        return $set
+    }
+
+    $usable = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $profiles.Keys) {
+        $missing = @($script:ProfileRequiredColumns | Where-Object { $profiles[$name] -notcontains $_ })
+        if ($missing.Count -eq 0) {
+            $usable.Add($name)
+        }
+        else {
+            $set.Unusable[$name] = [string[]]$missing
+        }
+    }
+    $set.Read = $true
+    $set.Usable = [string[]]$usable.ToArray()
+    return $set
+}
+
+function Resolve-OutputProfile {
+    <#
+    .SYNOPSIS
+        Accepts the chosen output profile, or refuses it with a plain reason.
+    .DESCRIPTION
+        The one place a profile is turned away. A name the binary doesn't
+        offer is refused, naming the ones it does. A profile it offers whose
+        headers lack one of the columns the triage views read is refused
+        too, for now, naming the missing column. If running such a profile
+        and skipping the dashboard is ever wanted, this is where to change.
+        Returns the profile name as Hayabusa spells it.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$ProfileSet
+    )
+
+    $wanted = $Name.Trim()
+    $choices = $ProfileSet.Usable -join ', '
+    foreach ($p in $ProfileSet.Usable) {
+        if ($p -ieq $wanted) {
+            return $p
+        }
+    }
+    foreach ($p in $ProfileSet.Unusable.Keys) {
+        if ($p -ieq $wanted) {
+            # Named from the profile's own headers, whatever it calls them instead.
+            $missing = @($ProfileSet.Unusable[$p])
+            $columns = "$($missing[0]) column, which"
+            if ($missing.Count -gt 1) {
+                $columns = "$((@($missing | Select-Object -First ($missing.Count - 1))) -join ', ') or $($missing[-1]) columns, which"
+            }
+            throw ("Profile '{0}' has no {1} the triage dashboard needs, so it isn't available yet. Use one of: {2}" -f $p, $columns, $choices)
+        }
+    }
+    if ($ProfileSet.Read) {
+        throw ("Profile '{0}' isn't one this Hayabusa offers. Use one of: {1}" -f $Name, $choices)
+    }
+    throw ("Profile '{0}' can't be checked, because the list of profiles couldn't be read. Use one of: {1}" -f $Name, $choices)
+}
+
 function Get-RulesVersion {
     <#
     .SYNOPSIS

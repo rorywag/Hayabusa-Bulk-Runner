@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `Profile` accepts any output profile the Hayabusa binary offers whose columns include `Level`, `Computer` and `RuleTitle`, the columns the triage dashboard reads, not just `standard` and `verbose`. The list is read from `config\profiles.yaml` beside `hayabusa.exe` at startup, checking each profile's column headers. A profile Hayabusa doesn't offer is refused, naming the ones it does, and so is one whose columns lack one of the three, naming the column it lacks. If `profiles.yaml` can't be read, the run warns and allows only `standard` and `verbose`, as before. The default is still `standard`, and run-meta still records the profile used. The compatibility self-test has a new `profiles` check that lists which profiles a release offers and which of them the tool accepts.
+
 ## [0.9.0] - 2026-10-16
 
 ### Added

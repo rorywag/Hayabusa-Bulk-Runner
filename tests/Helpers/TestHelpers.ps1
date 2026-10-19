@@ -8,6 +8,7 @@
 $script:RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:FixtureRoot = Join-Path -Path (Split-Path -Parent $PSScriptRoot) -ChildPath 'fixtures'
 $script:FakeHayabusaScript = Join-Path -Path $PSScriptRoot -ChildPath 'FakeHayabusa.ps1'
+$script:ProfilesFixture = Join-Path -Path $script:FixtureRoot -ChildPath 'profiles.yaml'
 $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHayabusa.ps1'
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
@@ -176,13 +177,16 @@ function Get-TestPowerShellPath {
 function New-FakeHayabusa {
     <#
     Creates a launcher for FakeHayabusa.ps1 in Directory, plus a rules folder
-    beside it, and returns the launcher path. The launcher runs the fake as
-    its own process with the same PowerShell that is running the tests.
+    and config\profiles.yaml beside it, and returns the launcher path. The
+    launcher runs the fake as its own process with the same PowerShell that
+    is running the tests.
     #>
     param([Parameter(Mandatory)][string]$Directory)
     New-TestDirectory -Path $Directory | Out-Null
     $rules = New-TestDirectory -Path (Join-Path -Path $Directory -ChildPath 'rules')
     Write-TestText -Path (Join-Path -Path $rules -ChildPath 'r.yml') -Line @('title: synthetic') | Out-Null
+    $config = New-TestDirectory -Path (Join-Path -Path $Directory -ChildPath 'config')
+    Copy-Item -LiteralPath $script:ProfilesFixture -Destination (Join-Path -Path $config -ChildPath 'profiles.yaml')
     $hostExe = Get-TestPowerShellPath
     if ($script:TestOnWindows) {
         $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa.cmd'

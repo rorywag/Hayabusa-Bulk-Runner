@@ -28,7 +28,9 @@
     # TimelineStart = '2026-01-01 00:00:00 +00:00'
     # TimelineEnd   = '2026-01-31 23:59:59 +00:00'
 
-    # Output profile: standard or verbose.
+    # Output profile: any profile your Hayabusa offers whose columns include
+    # Level, Computer and RuleTitle, such as standard or verbose. The list is
+    # read from config\profiles.yaml beside hayabusa.exe.
     Profile = 'standard'
 
     # ZIP safety limits, checked before anything is extracted. A ZIP over

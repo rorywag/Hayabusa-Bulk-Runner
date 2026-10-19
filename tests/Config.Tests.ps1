@@ -5,6 +5,8 @@ BeforeAll {
     New-TestDirectory (Join-TestPath $tool 'rules') | Out-Null
     $script:hb = Join-TestPath $tool 'hayabusa.exe'
     Write-TestText -Path $hb -Line @('not a binary') | Out-Null
+    New-TestDirectory (Join-TestPath $tool 'config') | Out-Null
+    Copy-Item -LiteralPath $ProfilesFixture -Destination (Join-TestPath $tool 'config' 'profiles.yaml')
     $script:cfgDir = New-TestDirectory (Join-TestPath $TestDrive 'cfg')
     New-TestDirectory (Join-TestPath $cfgDir 'myrules') | Out-Null
 
@@ -126,7 +128,7 @@ Describe 'Engagement config' {
 
     It 'rejects <Name>' -ForEach @(
         @{ Name = 'a bad level'; Body = "@{ MinLevel='severe' }"; Like = "*MinLevel 'severe' is not valid*" }
-        @{ Name = 'a bad profile'; Body = "@{ Profile='super-verbose' }"; Like = '*Profile*not valid*' }
+        @{ Name = 'a profile Hayabusa does not offer'; Body = "@{ Profile='extra-verbose' }"; Like = "Profile 'extra-verbose' isn't one this Hayabusa offers. Use one of: minimal, standard, verbose, all-field-info, all-field-info-verbose, super-verbose" }
         @{ Name = 'a bad timeline format'; Body = "@{ TimelineStart='2026-01-01' }"; Like = '*TimelineStart*not valid*' }
         @{ Name = 'a reversed time window'; Body = "@{ TimelineStart='2026-02-01 00:00:00 +00:00'; TimelineEnd='2026-01-01 00:00:00 +00:00' }"; Like = '*must be earlier*' }
         @{ Name = 'a tag in both lists'; Body = "@{ IncludeTags=@('a'); ExcludeTags=@('a') }"; Like = '*both IncludeTags and ExcludeTags*' }
@@ -184,5 +186,59 @@ Describe 'Emergency level in settings' {
             $sel = (Resolve-With $Body).Selection
         }
         Get-SeverityLevelNotice -Selection $sel | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Output profiles' {
+    BeforeAll {
+        function script:New-ProfileTool([string]$Name, [AllowNull()][string[]]$Yaml) {
+            $d = New-TestDirectory (Join-TestPath $TestDrive $Name)
+            New-TestDirectory (Join-TestPath $d 'rules') | Out-Null
+            $exe = Write-TestText -Path (Join-TestPath $d 'hayabusa.exe') -Line @('not a binary')
+            if ($null -ne $Yaml) {
+                Write-TestText -Path (Join-TestPath $d 'config' 'profiles.yaml') -Line $Yaml | Out-Null
+            }
+            $exe
+        }
+        function script:Resolve-Profile([string]$Choice, [string]$Exe = $hb) {
+            (Resolve-RunSetting -CommandLine @{ Profile = $Choice } -Config $null -HayabusaPath $Exe -WarningAction SilentlyContinue).Selection.Profile
+        }
+    }
+
+    It 'accepts <Choice>, whose columns include Level, Computer and RuleTitle' -ForEach @(
+        @{ Choice = 'minimal' }
+        @{ Choice = 'All-Field-Info-Verbose' }
+        @{ Choice = 'super-verbose' }
+    ) {
+        Resolve-Profile $Choice | Should -BeExactly $Choice.ToLowerInvariant()
+    }
+    It 'reads the profiles from the binary''s own profiles.yaml, headers only' {
+        $set = Get-HayabusaProfileSet -HayabusaPath $hb
+        $set.Read | Should -BeTrue
+        @($set.Usable) | Should -Be @('minimal', 'standard', 'verbose', 'all-field-info', 'all-field-info-verbose', 'super-verbose')
+        @($set.Unusable.Keys) | Should -Be @('timesketch-minimal', 'timesketch-verbose')
+        @($set.Unusable['timesketch-minimal']) | Should -Be @('RuleTitle')
+    }
+    It 'refuses a profile without a column the dashboard needs, naming the column from its headers' {
+        $m = Get-ThrownMessage { Resolve-Profile 'timesketch-minimal' }
+        $m | Should -BeExactly "Profile 'timesketch-minimal' has no RuleTitle column, which the triage dashboard needs, so it isn't available yet. Use one of: minimal, standard, verbose, all-field-info, all-field-info-verbose, super-verbose"
+        $exe = New-ProfileTool 'two-missing' @('standard:', '    Level: "%Level%"', '    Computer: "%Computer%"', '    RuleTitle: "%RuleTitle%"', 'slim:', '    RuleTitle: "%RuleTitle%"', '    Timestamp: "%Timestamp%"')
+        Get-ThrownMessage { Resolve-Profile 'slim' $exe } | Should -BeLike "Profile 'slim' has no Level or Computer columns, which the triage dashboard needs*Use one of: standard"
+    }
+    It 'falls back to standard and verbose, with a warning, when profiles.yaml is <Case>' -ForEach @(
+        @{ Case = 'missing'; Yaml = $null; Why = 'the file is not there' }
+        @{ Case = 'not in the expected layout'; Yaml = @('- standard', '- verbose'); Why = 'line 1 is not a profile name or an indented column: - standard' }
+        @{ Case = 'empty'; Yaml = @('# nothing here'); Why = 'it defines no profiles' }
+    ) {
+        $exe = New-ProfileTool ('fallback-' + [guid]::NewGuid().ToString('N')) $Yaml
+        $w = $null
+        $r = Resolve-RunSetting -CommandLine @{ Profile = 'verbose' } -Config $null -HayabusaPath $exe -WarningVariable w -WarningAction SilentlyContinue
+        $r.Selection.Profile | Should -Be 'verbose'
+        $profilesPath = Join-TestPath (Split-Path -Parent $exe) 'config' 'profiles.yaml'
+        @($w | Where-Object { "$_" -eq "Couldn't read the list of output profiles from $profilesPath ($Why). Only standard and verbose can be used." }).Count | Should -Be 1
+        Get-ThrownMessage { Resolve-Profile 'super-verbose' $exe } | Should -BeLike "Profile 'super-verbose' can't be checked, because the list of profiles couldn't be read. Use one of: standard, verbose"
+    }
+    It 'keeps standard as the default' {
+        (Resolve-RunSetting -CommandLine @{} -Config $null -HayabusaPath $hb).Selection.Profile | Should -Be 'standard'
     }
 }

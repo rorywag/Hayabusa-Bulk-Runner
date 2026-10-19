@@ -13,7 +13,6 @@ $script:ConfigKeys = @(
 
 # Hayabusa's six levels, lowest to highest. Emergency is above critical.
 $script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical', 'emergency')
-$script:OutputProfiles = @('standard', 'verbose')
 
 # Hayabusa expects --timeline-start and --timeline-end in this form,
 # for example "2026-01-01 00:00:00 +00:00".
@@ -287,10 +286,13 @@ function Resolve-RunSetting {
         $exactLevel = ConvertTo-SeverityLevel -Name 'ExactLevel' -Value ([string]$values['ExactLevel'])
     }
 
-    $outputProfile = ([string]$values['Profile']).Trim().ToLowerInvariant()
-    if ($script:OutputProfiles -notcontains $outputProfile) {
-        throw ("Profile '{0}' is not valid. Use one of: {1}" -f $values['Profile'], ($script:OutputProfiles -join ', '))
+    # The profiles are read from the binary's own config\profiles.yaml, so a
+    # Hayabusa release that adds one needs no change here.
+    $profileSet = Get-HayabusaProfileSet -HayabusaPath $HayabusaPath
+    if (-not $profileSet.Read) {
+        Write-Warning ("Couldn't read the list of output profiles from {0} ({1}). Only {2} can be used." -f $profileSet.Path, $profileSet.Error, ($profileSet.Usable -join ' and '))
     }
+    $outputProfile = Resolve-OutputProfile -Name ([string]$values['Profile']) -ProfileSet $profileSet
 
     [string[]]$includeTags = @(ConvertTo-TagList -Name 'IncludeTags' -Value $values['IncludeTags'])
     [string[]]$excludeTags = @(ConvertTo-TagList -Name 'ExcludeTags' -Value $values['ExcludeTags'])
