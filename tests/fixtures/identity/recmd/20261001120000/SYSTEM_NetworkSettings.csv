@@ -1,0 +1,7 @@
+BatchKeyPath,BatchValueName,IPAddress,SubnetMask,DHCPSubnetMask,DHCPServer,DHCPNameServer,DHCPIPAddress,DHCPDefaultGateway,LeaseObtainedTime,LeaseTerminatesTime,EnabledDHCP
+ROOT\ControlSet001\Services\Tcpip\Parameters\Interfaces\{55555555-eeee-4eee-8eee-555555555555},Multiple,10.99.99.99,,,,,,,,,False
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{11111111-aaaa-4aaa-8aaa-111111111111},Multiple,,,255.255.255.0,192.0.2.1,192.0.2.1 192.0.2.2,192.0.2.50,192.0.2.1,2026-08-29 10:40:00.0000000,2026-08-30 10:40:00.0000000,True
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{11111111-aaaa-4aaa-8aaa-111111111111},Multiple,,,255.255.255.0,192.0.2.1,192.0.2.1 192.0.2.2,192.0.2.50,192.0.2.1,2026-08-29 10:40:00.0000000,2026-08-30 10:40:00.0000000,True
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{22222222-bbbb-4bbb-8bbb-222222222222},Multiple,0.0.0.0,,255.255.254.0,198.51.100.1,198.51.100.1,198.51.100.23,198.51.100.1,2026-09-15 19:20:00.0000000,2026-09-15 21:20:00.0000000,True
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{33333333-cccc-4ccc-8ccc-333333333333},Multiple,203.0.113.7 203.0.113.8,255.255.255.0 255.255.255.0,,255.255.255.255,,,,,,False
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{44444444-dddd-4ddd-8ddd-444444444444},Multiple,,,,,,,,,,True

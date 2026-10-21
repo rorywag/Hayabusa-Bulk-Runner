@@ -192,7 +192,7 @@ To rebuild the triage files and dashboard from an existing OutputRoot without re
 
 ## Engagement config
 
-Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](../config/engagement.example.psd1), which lists every setting with a comment, and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits. Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
+Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](../config/engagement.example.psd1), which lists every setting with a comment, and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits, and `RECmdPath`, for [host identity from registry hives](#host-identity-from-registry-hives). Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
 
 `ExactLevel` sets a single level instead of a floor, for example only critical. MinLevel and ExactLevel are mutually exclusive: a config that sets both is refused, and `-MinLevel` on the command line replaces a config's ExactLevel.
 
@@ -217,6 +217,42 @@ The sample event is Security 1102, which Hayabusa's own "Log Cleared" rule detec
 - **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, then set the same version between each pair of tested-version markers: two in the README, under Status and Requirements, and two in this file, under Not yet confirmed on Windows and this section. A test fails if any of them doesn't match. No code change is needed.
 - **Red:** the FAIL line names the flag, column or level that changed, and for a refused flag, what Hayabusa said on stderr. Fix `New-HayabusaArgument` in `lib\Hayabusa.ps1`, or the result handling in `lib\Results.ps1`, then run the check again.
 
+## Host identity from registry hives
+
+`lib\HostIdentity.ps1` reads each collection's host identity from its registry hives: the computer name, domain, OS, time zone, local users and IP addressing. It isn't part of a run yet. It doesn't change how hosts are named in the manifest or the dashboard, which still comes from the `Computer` column of Hayabusa's output.
+
+It runs Eric Zimmerman's RECmd, tested with version <!--tested-recmd-version-->2026.10.0<!--/tested-recmd-version-->. The tool doesn't download it. Set `RECmdPath` in the engagement config to the full path of `RECmd.exe`, or to a path relative to the config file. It must be outside the evidence: a `RECmd.exe` inside the collection being read is refused.
+
+How it reads a collection:
+
+- It looks for `Windows\System32\config`, in any case, at the collection root or up to three folders down, which covers the drive letter folder KAPE writes, such as `C\Windows`. Only SYSTEM, SOFTWARE and SAM are read, never NTUSER.DAT. A collection with none of the three, such as one of event logs only, gives a `NoRegistryHives` result rather than an error.
+- Each hive and its `.LOG`, `.LOG1` and `.LOG2` files are copied to a folder of their own under `OutputRoot\_work`, and RECmd runs on the copies, so the evidence is only ever read. RECmd applies the transaction logs in memory and doesn't change the files. The SHA-256 of each copy is recorded. The work folder holds the copy of SAM and RECmd's full output for it, which includes password hints and the answers to security questions, so it's removed once the hives are read, whatever happens.
+- RECmd runs with `lib\HostIdentity.reb`, a short batch file made from entries in RECmd's standard batch files, so the columns it writes stay the same from run to run. Deleted keys and values are not recovered.
+- A dirty hive with no transaction logs beside it is read again without them, with a note that changes Windows hadn't yet written to it are missing.
+- The active control set comes from `SYSTEM\Select\Current`, rather than being taken to be ControlSet001.
+
+What it records, saved as `OutputRoot\<Collection>\<Collection>_identity.json`:
+
+- **Hostname:** the ComputerName value. The DNS domain is recorded beside it, so a full name can be formed later. Nothing is matched against the Computer names in Hayabusa's output.
+- **Domain:** the DNS domain from Tcpip, and Winlogon's `CachePrimaryDomain` and `DefaultDomainName`. `Membership` is `Domain` when `CachePrimaryDomain` names a domain other than the computer itself. A workgroup's name is kept in the SECURITY hive, which isn't read, so a computer with no domain evidence is `NoDomainEvidence`.
+- **OS:** the product name, edition, release, build, install date, registered owner and organization. Windows 11 keeps the Windows 10 product name in the registry, so a build of 22000 or later named Windows 10 gets a note.
+- **Time zone:** the key name, the standard and daylight names, and the bias, both the standard one and the one in force when the hive was last written, in signed minutes and as a UTC offset.
+- **Users:** each local account in SAM, with its name, full name, RID, the times it was created, last logged in and last changed its password, its login counts, groups, comment and account flags. Each is `Interactive`, a RID of 1000 or more on a normal user account that Windows or other software doesn't manage, `BuiltIn`, a RID under 1000 such as Administrator and Guest, or `System`, the rest, such as defaultuser0 and trust accounts, with the reason. The password hint and the security question answers are never read.
+- **Interfaces:** every interface in the active control set, virtual ones such as Hyper-V, WSL and VPN adapters included. Each has its address, whether it's static or from DHCP, the mask, gateway, DNS servers and DHCP server, the network name from the DHCP network hint, and the lease times. They're ordered newest lease first, and the newest leased interface with an address is flagged `LikelyActive`.
+
+Every time is UTC, in the form `2026-01-01T00:00:00Z`, in a field whose name ends in `Utc`. RECmd gives each of the times read here in UTC, so none is local only. `Status` is `Complete` when all three hives were read, `Partial` when only some were, `Failed` when none were, and `NoRegistryHives` as above. `Notes` says what was missing and why. `SchemaVersion` is 1.
+
+### Checking a new RECmd release
+
+The RECmd compatibility test builds throwaway SYSTEM and SOFTWARE hives from made-up keys in a temporary folder, without reading or saving the live registry, runs RECmd over them, and checks it still writes every column the parser reads and gives back the planted computer name. It needs Windows:
+
+```powershell
+$env:RECMD_COMPAT_PATH = 'D:\Tools\RECmd\RECmd.exe'
+Invoke-Pester -Path .\tests\HostIdentity.Tests.ps1 -TagFilter Compatibility
+```
+
+SAM isn't covered, since a valid SAM can't be made up, so check the users against a real collection too. When it passes, raise `$script:TestedRECmdVersion` in `lib\HostIdentity.ps1`, then set the same version between the tested-recmd-version markers in this file. A test fails if they don't match.
+
 ## Running the tests
 
 The tests use [Pester](https://pester.dev) 5 and a fake Hayabusa written in PowerShell, so they don't need the real binary or any evidence.
@@ -226,7 +262,7 @@ Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPubl
 Invoke-Pester -Path .\tests
 ```
 
-Most of the suite runs anywhere. The end-to-end run with the fake binary needs Windows. `tests\Mount.Integration.Tests.ps1` builds a small VHDX, mounts it the same way a real run does, and checks the image's hash is unchanged afterwards. It only runs on Windows in an elevated session and skips everywhere else. `tests\Compatibility.Tests.ps1` also runs the self-test against a real Hayabusa when `HAYABUSA_COMPAT_PATH` is set to its `hayabusa.exe`, on Windows, and skips otherwise.
+Most of the suite runs anywhere. The end-to-end run with the fake binary needs Windows. `tests\Mount.Integration.Tests.ps1` builds a small VHDX, mounts it the same way a real run does, and checks the image's hash is unchanged afterwards. It only runs on Windows in an elevated session and skips everywhere else. `tests\Compatibility.Tests.ps1` also runs the self-test against a real Hayabusa when `HAYABUSA_COMPAT_PATH` is set to its `hayabusa.exe`, on Windows, and skips otherwise. `tests\HostIdentity.Tests.ps1` runs RECmd against throwaway hives when `RECMD_COMPAT_PATH` is set to its `RECmd.exe`, on Windows, and skips otherwise too.
 
 Lint with [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer), which includes the Windows PowerShell 5.1 compatibility rules:
 

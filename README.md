@@ -94,6 +94,7 @@ The evidence is only ever read.
 - The full list of outputs and the tool's working folders
 - Rerunning, resuming and what each status means
 - The engagement config and every setting it takes
+- Reading host identity from registry hives with RECmd
 - Running the tests
 
 ## Security

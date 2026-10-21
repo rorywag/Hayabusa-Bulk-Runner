@@ -37,6 +37,14 @@
 [nN][tT][uU][sS][eE][rR].[dD][aA][tT]*
 [uU][sS][rR][cC][lL][aA][sS][sS].[dD][aA][tT]*
 *.[hH][vV][eE]
+# Registry hives and their transaction logs. *.log is ignored further down.
+[sS][yY][sS][tT][eE][mM]
+[sS][oO][fF][tT][wW][aA][rR][eE]
+[sS][aA][mM]
+[sS][eE][cC][uU][rR][iI][tT][yY]
+[dD][eE][fF][aA][uU][lL][tT]
+*.[lL][oO][gG]1
+*.[lL][oO][gG]2
 *.[pP][fF]
 $[mM][fF][tT]
 $[lL]og[fF]ile
@@ -122,3 +130,5 @@ desktop.ini
 !config/engagement.example.psd1
 # Synthetic test timelines, nothing from a real host.
 !tests/fixtures/*_timeline.csv
+# Synthetic RECmd output for the host identity parser, nothing from a real host.
+!tests/fixtures/identity/**/*.csv

@@ -1,0 +1,4 @@
+BatchKeyPath,BatchValueName,NetworkHint,DHCPAddress,DHCPServer,DHCPDomain,LeaseObtained,LeaseExpires,DefaultGateway,Interface,InterfaceSubkey
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{11111111-aaaa-4aaa-8aaa-111111111111},Multiple,FAKE-LAN,192.0.2.50,192.0.2.1,home.example,2026-08-29 10:40:00.0000000,2026-08-30 10:40:00.0000000,192.0.2.1,{11111111-aaaa-4aaa-8aaa-111111111111},{11111111-aaaa-4aaa-8aaa-111111111111}
+ROOT\ControlSet002\Services\Tcpip\Parameters\Interfaces\{11111111-aaaa-4aaa-8aaa-111111111111}\6414B454D234146454,Multiple,FAKE-CAFE,192.0.2.99,,,2026-08-19 00:40:00.0000000,2026-10-01 12:00:00.0000000,,{11111111-aaaa-4aaa-8aaa-111111111111},6414B454D234146454
+ROOT\ControlSet001\Services\Tcpip\Parameters\Interfaces\{55555555-eeee-4eee-8eee-555555555555},Multiple,OLD-NET,10.99.99.99,,,2026-09-30 08:00:00.0000000,2026-09-30 08:00:00.0000000,,{55555555-eeee-4eee-8eee-555555555555},{55555555-eeee-4eee-8eee-555555555555}

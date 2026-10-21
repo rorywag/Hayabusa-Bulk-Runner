@@ -11,6 +11,13 @@ $script:ConfigKeys = @(
     'ZipMaxRatio'
 )
 
+# Keys read by other parts of the tool, not by Resolve-RunSetting, so they
+# never change how Hayabusa runs. RECmdPath is the full path of RECmd.exe,
+# for reading host identity from registry hives.
+$script:OtherConfigKeys = @(
+    'RECmdPath'
+)
+
 # Hayabusa's six levels, lowest to highest. Emergency is above critical.
 $script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical', 'emergency')
 
@@ -46,10 +53,11 @@ function Import-EngagementConfig {
         throw "Config file could not be read as data: $Path. $($_.Exception.Message)"
     }
 
-    $unknown = @($data.Keys | Where-Object { $script:ConfigKeys -notcontains $_ })
+    $allowed = @($script:ConfigKeys) + @($script:OtherConfigKeys)
+    $unknown = @($data.Keys | Where-Object { $allowed -notcontains $_ })
     if ($unknown.Count -gt 0) {
         throw ("Config file {0} has unknown key(s): {1}. Allowed keys: {2}" -f
-            $Path, ($unknown -join ', '), ($script:ConfigKeys -join ', '))
+            $Path, ($unknown -join ', '), ($allowed -join ', '))
     }
 
     [pscustomobject]@{
