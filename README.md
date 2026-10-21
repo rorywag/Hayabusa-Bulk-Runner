@@ -16,6 +16,10 @@ The console during the same run:
 
 ![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
 
+The host identity dashboard, an example built from synthetic data with made-up hosts, accounts and addresses. One workstation's other interfaces and its built-in and system accounts are unfolded:
+
+![Host identity dashboard: one row per host with its registry computer name, OS and build, domain, time zone, likely active address and network name, and interactive users, including a Partial host whose users weren't read and a collection with no registry hives](docs/images/identity_dashboard.png)
+
 ## What it does
 
 - Runs Hayabusa once per host, so each host gets its own HTML report, CSV timeline and log instead of one combined output.
@@ -25,6 +29,7 @@ The console during the same run:
 - Resumes a case. Run the same command again and it skips the hosts already finished and picks up the rest.
 - Treats the evidence as read-only the whole way through. Each disk image is hashed with SHA-256 before it's mounted and again after teardown, both hashes go in the run's record, and a host whose image changed fails.
 - Takes an engagement config so every host in a case runs against the same settings.
+- Optionally reads each host's identity from its registry hives with RECmd, the computer name, OS, domain, time zone, local users and IP addresses, into a separate identity dashboard. `-IdentityOnly` does just that, without Hayabusa. See [Host identity](#host-identity).
 
 ## Status
 
@@ -36,6 +41,7 @@ Released. It's early days, so bugs may surface. It's been run against real Hayab
 - Windows PowerShell 5.1 or PowerShell 7.
 - Hayabusa <!--tested-version-->4.2.0<!--/tested-version--> with its rules. Run `hayabusa.exe update-rules` once at the start of the engagement and leave the rules alone until it's finished, so every host is checked against the same set.
 - An elevated session if any collection is a disk image, including a disk image inside a ZIP.
+- For host identity only, Eric Zimmerman's RECmd. See [Host identity](#host-identity).
 
 ## Getting it
 
@@ -72,6 +78,23 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 `.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary. For the full parameter list, worked examples, the input and output model and the engagement config, see [docs/USAGE.md](docs/USAGE.md).
 
+## Host identity
+
+Host identity does nothing until `RECmdPath` is set in the engagement config to the full path of `RECmd.exe`. The tool doesn't download RECmd, so get it from Eric Zimmerman's tools first. The line is in [config/engagement.example.psd1](config/engagement.example.psd1), commented out: uncomment it and set it to the path of a real `RECmd.exe`. While it's missing or commented out, a normal run skips host identity and `-IdentityOnly` refuses to start.
+
+With `RECmdPath` set:
+
+- A normal run reads each collection's host identity in the same pass that runs Hayabusa, while the collection is already extracted or mounted, and writes `identity_dashboard.html` next to `triage_dashboard.html`. Nothing is extracted or mounted twice.
+- `-IdentityOnly` reads host identity without running Hayabusa, for a quick who, what and where at the start of a case, or to fill it in later for hosts an earlier run already finished.
+
+There's no need to read host identity in a separate pass first. Set `RECmdPath` and a normal run does both.
+
+```powershell
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
+```
+
+See [Host identity from registry hives](docs/USAGE.md#host-identity-from-registry-hives) for what it reads and how it keeps the evidence untouched.
+
 ## Evidence integrity
 
 The evidence is only ever read.
@@ -94,6 +117,7 @@ The evidence is only ever read.
 - The full list of outputs and the tool's working folders
 - Rerunning, resuming and what each status means
 - The engagement config and every setting it takes
+- Reading host identity from registry hives with RECmd, the identity dashboard and `-IdentityOnly`
 - Running the tests
 
 ## Security

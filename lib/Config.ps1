@@ -11,6 +11,18 @@ $script:ConfigKeys = @(
     'ZipMaxRatio'
 )
 
+# Keys read by other parts of the tool, not by Resolve-RunSetting, so they
+# never change how Hayabusa runs. RECmdPath is the full path of RECmd.exe,
+# for reading host identity from registry hives.
+$script:OtherConfigKeys = @(
+    'RECmdPath'
+)
+
+# The ZIP safety limits a run uses when neither the command line nor the
+# config sets them.
+$script:DefaultZipMaxUncompressedGB = 100
+$script:DefaultZipMaxRatio = 250
+
 # Hayabusa's six levels, lowest to highest. Emergency is above critical.
 $script:SeverityLevels = @('informational', 'low', 'medium', 'high', 'critical', 'emergency')
 
@@ -46,10 +58,11 @@ function Import-EngagementConfig {
         throw "Config file could not be read as data: $Path. $($_.Exception.Message)"
     }
 
-    $unknown = @($data.Keys | Where-Object { $script:ConfigKeys -notcontains $_ })
+    $allowed = @($script:ConfigKeys) + @($script:OtherConfigKeys)
+    $unknown = @($data.Keys | Where-Object { $allowed -notcontains $_ })
     if ($unknown.Count -gt 0) {
         throw ("Config file {0} has unknown key(s): {1}. Allowed keys: {2}" -f
-            $Path, ($unknown -join ', '), ($script:ConfigKeys -join ', '))
+            $Path, ($unknown -join ', '), ($allowed -join ', '))
     }
 
     [pscustomobject]@{
@@ -244,8 +257,8 @@ function Resolve-RunSetting {
         TimelineStart        = $null
         TimelineEnd          = $null
         Profile              = 'standard'
-        ZipMaxUncompressedGB = 100
-        ZipMaxRatio          = 250
+        ZipMaxUncompressedGB = $script:DefaultZipMaxUncompressedGB
+        ZipMaxRatio          = $script:DefaultZipMaxRatio
     }
 
     $values = @{}
@@ -331,8 +344,7 @@ function Resolve-RunSetting {
         }
     }
 
-    $zipMaxGB = ConvertTo-PositiveNumber -Name 'ZipMaxUncompressedGB' -Value $values['ZipMaxUncompressedGB'] -Minimum 0.001
-    $zipMaxRatio = ConvertTo-PositiveNumber -Name 'ZipMaxRatio' -Value $values['ZipMaxRatio'] -Minimum 1
+    $limits = New-ZipLimit -MaxUncompressedGB $values['ZipMaxUncompressedGB'] -MaxRatio $values['ZipMaxRatio']
 
     [pscustomobject]@{
         Selection = [ordered]@{
@@ -345,11 +357,59 @@ function Resolve-RunSetting {
             TimelineEnd   = $timelineEnd
             Profile       = $outputProfile
         }
-        Limits    = [ordered]@{
-            ZipMaxUncompressedGB    = $zipMaxGB
-            ZipMaxUncompressedBytes = [long]($zipMaxGB * 1GB)
-            ZipMaxRatio             = $zipMaxRatio
-        }
+        Limits    = $limits
         Sources   = $sources
     }
+}
+
+function New-ZipLimit {
+    # The ZIP limits a run uses, checked, in the form Resolve-RunSetting
+    # returns them.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [AllowNull()]
+        [object]$MaxUncompressedGB,
+
+        [AllowNull()]
+        [object]$MaxRatio
+    )
+
+    $zipMaxGB = ConvertTo-PositiveNumber -Name 'ZipMaxUncompressedGB' -Value $MaxUncompressedGB -Minimum 0.001
+    $zipMaxRatio = ConvertTo-PositiveNumber -Name 'ZipMaxRatio' -Value $MaxRatio -Minimum 1
+    return [ordered]@{
+        ZipMaxUncompressedGB    = $zipMaxGB
+        ZipMaxUncompressedBytes = [long]($zipMaxGB * 1GB)
+        ZipMaxRatio             = $zipMaxRatio
+    }
+}
+
+function Resolve-ZipLimit {
+    <#
+    .SYNOPSIS
+        The ZIP limits from an engagement config, or the defaults.
+    .DESCRIPTION
+        For a run that reads host identity only, which needs no Hayabusa
+        and so doesn't call Resolve-RunSetting. The same defaults and
+        checks apply.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [AllowNull()]
+        [pscustomobject]$Config
+    )
+
+    $gb = $script:DefaultZipMaxUncompressedGB
+    $ratio = $script:DefaultZipMaxRatio
+    if ($null -ne $Config) {
+        if ($Config.Values.ContainsKey('ZipMaxUncompressedGB')) {
+            $gb = $Config.Values['ZipMaxUncompressedGB']
+        }
+        if ($Config.Values.ContainsKey('ZipMaxRatio')) {
+            $ratio = $Config.Values['ZipMaxRatio']
+        }
+    }
+    return (New-ZipLimit -MaxUncompressedGB $gb -MaxRatio $ratio)
 }

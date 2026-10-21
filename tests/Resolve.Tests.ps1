@@ -109,6 +109,84 @@ Describe 'Removal guards' {
     }
 }
 
+Describe 'Removing a working folder with read-only files' {
+    BeforeAll {
+        function script:Set-ReadOnly([string]$Path) {
+            [System.IO.File]::SetAttributes($Path, ([System.IO.File]::GetAttributes($Path) -bor [System.IO.FileAttributes]::ReadOnly))
+        }
+        function script:Test-ReadOnly([string]$Path) {
+            return (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::ReadOnly) -ne 0)
+        }
+    }
+
+    It 'removes a tree holding read-only files and folders, as copied from a mounted image' {
+        $wr = New-TestDirectory (Join-TestPath $out '_work' 'ro')
+        $sub = New-TestDirectory (Join-TestPath $wr 'config')
+        $f = Write-TestText -Path (Join-TestPath $sub 'SAM') -Line @('copy')
+        Set-ReadOnly $f
+        Set-ReadOnly $sub
+        Remove-DirectoryTree -Path $wr
+        Test-Path -LiteralPath $wr | Should -BeFalse
+    }
+
+    It 'clears ReadOnly and tries once more when the first delete is refused' {
+        $script:attempt = 0
+        Mock Remove-DirectoryTreeOnce {
+            $script:attempt++
+            if ($script:attempt -eq 1) { throw (New-Object System.UnauthorizedAccessException "Access to the path 'SAM' is denied.") }
+        }
+        Mock Clear-ReadOnlyAttribute { }
+        Remove-DirectoryTree -Path (Join-TestPath $out '_work' 'refused')
+        Should -Invoke Remove-DirectoryTreeOnce -Times 2 -Exactly
+        Should -Invoke Clear-ReadOnlyAttribute -Times 1 -Exactly
+    }
+
+    It 'does not clear ReadOnly when the delete works the first time' {
+        Mock Remove-DirectoryTreeOnce { }
+        Mock Clear-ReadOnlyAttribute { }
+        Remove-DirectoryTree -Path (Join-TestPath $out '_work' 'fine')
+        Should -Invoke Clear-ReadOnlyAttribute -Times 0 -Exactly
+    }
+
+    It 'clears ReadOnly on everything in the folder' {
+        $wr = New-TestDirectory (Join-TestPath $out '_work' 'clear')
+        $sub = New-TestDirectory (Join-TestPath $wr 'a' 'b')
+        $f = Write-TestText -Path (Join-TestPath $sub 'SYSTEM.LOG1') -Line @('x')
+        Set-ReadOnly $f
+        Set-ReadOnly $sub
+        Clear-ReadOnlyAttribute -Path $wr
+        Test-ReadOnly $f | Should -BeFalse
+        Test-ReadOnly $sub | Should -BeFalse
+    }
+
+    It 'neither follows nor changes a link, so nothing outside the folder is touched' {
+        $outside = New-TestDirectory (Join-TestPath $TestDrive 'evidence-ro')
+        $ev = Write-TestText -Path (Join-TestPath $outside 'SAM') -Line @('evidence')
+        Set-ReadOnly $ev
+        $wr = New-TestDirectory (Join-TestPath $out '_work' 'links')
+        try {
+            New-Item -ItemType SymbolicLink -Path (Join-TestPath $wr 'dirlink') -Target $outside -ErrorAction Stop | Out-Null
+            New-Item -ItemType SymbolicLink -Path (Join-TestPath $wr 'filelink') -Target $ev -ErrorAction Stop | Out-Null
+        }
+        catch {
+            [System.IO.File]::SetAttributes($ev, [System.IO.FileAttributes]::Normal)
+            Set-ItResult -Skipped -Because "this session can't create symbolic links: $($_.Exception.Message)"
+            return
+        }
+        try {
+            Clear-ReadOnlyAttribute -Path $wr
+            Test-ReadOnly $ev | Should -BeTrue -Because 'the link target is outside the folder'
+            Remove-DirectoryTree -Path $wr
+            Test-Path -LiteralPath $wr | Should -BeFalse
+            Test-Path -LiteralPath $ev | Should -BeTrue
+            Test-ReadOnly $ev | Should -BeTrue
+        }
+        finally {
+            [System.IO.File]::SetAttributes($ev, [System.IO.FileAttributes]::Normal)
+        }
+    }
+}
+
 Describe 'Interrupted while preparing a host' {
     It 'still removes what it set up when the run is stopped part way' {
         $o = New-TestDirectory (Join-TestPath $TestDrive 'interrupted')
