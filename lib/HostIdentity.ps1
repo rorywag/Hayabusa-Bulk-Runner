@@ -65,10 +65,14 @@ $script:RECmdPluginColumns = [ordered]@{
 }
 
 # Local accounts Windows or other software creates and manages, even with a
-# RID of 1000 or more.
+# RID of 1000 or more. WsiAccount is created by current Windows with a RID
+# such as 1004 and the normal user account flag set. HelpAssistant is the
+# Remote Assistance account on older hosts.
 $script:SystemManagedUserPatterns = @(
     '^defaultuser\d+$'
     '^WDAGUtilityAccount$'
+    '^WsiAccount$'
+    '^HelpAssistant$'
     '^HomeGroupUser\$$'
     '^SUPPORT_388945a0$'
     '^__vmware_user__$'
@@ -1428,6 +1432,62 @@ function Invoke-RECmdHive {
     }
 }
 
+function New-HostIdentityRecord {
+    <#
+    .SYNOPSIS
+        An empty host identity, the shape every identity file has.
+    .DESCRIPTION
+        Status and Note are given for a collection whose hives could not be
+        reached at all, such as a ZIP that would not extract, so the
+        identity dashboard shows why rather than a blank row.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory object only.')]
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Collection,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$RECmdPath,
+
+        [string]$Status,
+
+        [string[]]$Note = @()
+    )
+
+    $recmd = $null
+    if (-not [string]::IsNullOrEmpty($RECmdPath)) {
+        $recmd = $RECmdPath
+    }
+    $state = $null
+    if (-not [string]::IsNullOrEmpty($Status)) {
+        $state = $Status
+    }
+    return [ordered]@{
+        SchemaVersion = $script:HostIdentitySchemaVersion
+        Collection    = $Collection
+        ExtractedUtc  = [datetime]::UtcNow.ToString($script:IdentityTimeFormat, [System.Globalization.CultureInfo]::InvariantCulture)
+        Status        = $state
+        Notes         = [string[]]@($Note)
+        Source        = [ordered]@{
+            ConfigDirectory    = $null
+            Hives              = [ordered]@{}
+            RECmdPath          = $recmd
+            RECmdVersion       = $null
+            TestedRECmdVersion = $script:TestedRECmdVersion
+        }
+        ControlSet    = $null
+        Hostname      = $null
+        Domain        = $null
+        Os            = $null
+        TimeZone      = $null
+        Users         = @()
+        Interfaces    = @()
+    }
+}
+
 function Get-HostIdentity {
     <#
     .SYNOPSIS
@@ -1465,27 +1525,7 @@ function Get-HostIdentity {
     $recmd = Assert-RECmdPath -Path $RECmdPath -CollectionRoot $root
     $notes = New-Object System.Collections.Generic.List[string]
 
-    $identity = [ordered]@{
-        SchemaVersion = $script:HostIdentitySchemaVersion
-        Collection    = $Collection
-        ExtractedUtc  = [datetime]::UtcNow.ToString($script:IdentityTimeFormat, [System.Globalization.CultureInfo]::InvariantCulture)
-        Status        = $null
-        Notes         = $null
-        Source        = [ordered]@{
-            ConfigDirectory    = $null
-            Hives              = [ordered]@{}
-            RECmdPath          = $recmd
-            RECmdVersion       = $null
-            TestedRECmdVersion = $script:TestedRECmdVersion
-        }
-        ControlSet    = $null
-        Hostname      = $null
-        Domain        = $null
-        Os            = $null
-        TimeZone      = $null
-        Users         = @()
-        Interfaces    = @()
-    }
+    $identity = New-HostIdentityRecord -Collection $Collection -RECmdPath $recmd
 
     $found = Find-RegistryHive -Root $root
     foreach ($n in $found.Notes) {
@@ -1553,7 +1593,7 @@ function Get-HostIdentity {
                 $read++
             }
             else {
-                $notes.Add("RECmd read nothing from $name (exit code $($run.ExitCode)).")
+                $notes.Add("RECmd read nothing from $name. It exited with code $($run.ExitCode).")
             }
         }
 
@@ -1578,7 +1618,7 @@ function Get-HostIdentity {
 
     $v = $identity.Source.RECmdVersion
     if ($null -ne $v -and $v -ne $script:TestedRECmdVersion) {
-        $notes.Add("RECmd $v is not the version this tool was tested with ($script:TestedRECmdVersion). Run the RECmd compatibility test against it to check the columns this tool reads.")
+        $notes.Add("RECmd $v is not the version this tool was tested with, which is $script:TestedRECmdVersion. Run the RECmd compatibility test against it to check the columns this tool reads.")
     }
 
     if ($read -eq 0) {
@@ -1641,4 +1681,97 @@ function Save-HostIdentity {
     $json = ConvertTo-Json -InputObject $Identity -Depth $script:HostIdentityJsonDepth
     Write-TextFileAtomic -Path $path -Text $json
     return $path
+}
+
+function Read-HostIdentity {
+    <#
+    .SYNOPSIS
+        Reads a collection's saved identity file.
+    .DESCRIPTION
+        Exists is false when there is no file. Error says why a file that
+        exists could not be used: it isn't valid JSON, or it has a schema
+        version this tool doesn't know. Identity is the parsed object
+        otherwise. Nothing is written.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$OutputRoot,
+
+        [Parameter(Mandatory)]
+        [string]$Collection
+    )
+
+    $path = Get-HostIdentityPath -OutputRoot $OutputRoot -Collection $Collection
+    $result = [pscustomobject]@{
+        Path     = $path
+        Exists   = $false
+        Identity = $null
+        Error    = $null
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $result
+    }
+    $result.Exists = $true
+    try {
+        $parsed = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    }
+    catch {
+        $result.Error = "Its identity file could not be read: $($_.Exception.Message)"
+        return $result
+    }
+    $versionProp = $null
+    if ($null -ne $parsed) {
+        $versionProp = $parsed.PSObject.Properties['SchemaVersion']
+    }
+    if ($null -eq $versionProp -or [string]$versionProp.Value -ne [string]$script:HostIdentitySchemaVersion) {
+        $result.Error = "Its identity file has a schema version this tool doesn't read."
+        return $result
+    }
+    $result.Identity = $parsed
+    return $result
+}
+
+function Invoke-CollectionIdentity {
+    <#
+    .SYNOPSIS
+        Reads and saves one collection's host identity from a path that is
+        already extracted or mounted.
+    .DESCRIPTION
+        Called with the path the collection was resolved to for this run,
+        so a ZIP is never extracted, or an image mounted, a second time.
+        Never throws: if reading fails outright, a Failed identity saying
+        why is saved instead, and if saving fails, that is warned about.
+        Returns the identity.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Collection,
+
+        [Parameter(Mandatory)]
+        [string]$CollectionRoot,
+
+        [Parameter(Mandatory)]
+        [string]$OutputRoot,
+
+        [Parameter(Mandatory)]
+        [string]$RECmdPath
+    )
+
+    try {
+        $identity = Get-HostIdentity -Collection $Collection -CollectionRoot $CollectionRoot -OutputRoot $OutputRoot -RECmdPath $RECmdPath
+    }
+    catch {
+        $identity = New-HostIdentityRecord -Collection $Collection -RECmdPath $RECmdPath -Status 'Failed' -Note @("Host identity could not be read: $($_.Exception.Message)")
+    }
+    try {
+        Save-HostIdentity -OutputRoot $OutputRoot -Identity $identity | Out-Null
+    }
+    catch {
+        Write-Warning "${Collection}: could not save the host identity: $($_.Exception.Message)"
+    }
+    return $identity
 }

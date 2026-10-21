@@ -82,6 +82,9 @@ Describe 'Collection names' {
         $m = Get-ThrownMessage { Assert-CollectionNameAllowed -Collections @([pscustomobject]@{ Collection = '_runs'; Source = '_runs' }, [pscustomobject]@{ Collection = 'Triage_Dashboard.HTML'; Source = 'Triage_Dashboard.HTML' }, [pscustomobject]@{ Collection = '_diff'; Source = '_diff' }) }
         $m | Should -BeLike '*3 InputRoot entr(ies)*_runs -> _runs*Triage_Dashboard.HTML -> Triage_Dashboard.HTML*_diff -> _diff*'
     }
+    It 'refuses the identity dashboard''s name' {
+        Get-ThrownMessage { Assert-CollectionNameAllowed -Collections @([pscustomobject]@{ Collection = 'Identity_Dashboard.HTML'; Source = 'Identity_Dashboard.HTML' }) } | Should -BeLike '*Identity_Dashboard.HTML -> Identity_Dashboard.HTML*'
+    }
 }
 
 Describe 'Layout guards' {

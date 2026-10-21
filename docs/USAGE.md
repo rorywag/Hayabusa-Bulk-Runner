@@ -11,7 +11,7 @@ The tool has been run against real Hayabusa <!--tested-version-->4.2.0<!--/teste
 
 ## Parameters
 
-The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts and ConfigPath. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
+The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts, ConfigPath and IdentityOnly. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
 
 | Parameter | What it does |
 |---|---|
@@ -23,6 +23,7 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 | `-Force` | Rerun hosts that already finished |
 | `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
 | `-ConfigPath` | Engagement config file, see below |
+| `-IdentityOnly` | Read [host identity](#identity-only) with RECmd and nothing else. Needs `RECmdPath` in the config, and takes no `-HayabusaPath` |
 | `-Help` | Print a usage summary and exit. `-h` is the same |
 
 `-MinLevel` takes any of the six levels, informational, low, medium (the default), high, critical or emergency, and means that level and up.
@@ -53,6 +54,9 @@ Each of these is a complete command. Copy one and change the paths:
 
 # Engagement settings from a config: ExactLevel, tag filters, a time window and the output profile live there.
 .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1
+
+# Who, what and where only: host identity from the registry, no Hayabusa. The config sets RECmdPath.
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
 ```
 
 ## Lay out each case the same way
@@ -136,6 +140,8 @@ Everything lands under OutputRoot:
 | `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
 | `triage_dashboard.html` | The dashboard |
+| `<Collection>\<Collection>_identity.json` | That host's identity from its registry hives, when `RECmdPath` is set. See [Host identity from registry hives](#host-identity-from-registry-hives) |
+| `identity_dashboard.html` | The host identity dashboard, when `RECmdPath` is set |
 
 The dashboard is rule-first: a summary of totals by severity and the top rules, then the rule table, then the host table with links to each host's report, timeline and log, then where each row came from. Counts, report and timeline are only shown for a Completed or CompletedWithErrors host. A Failed host's files may be left from an earlier run, so it shows only its error and its log. If the rollup can't read a Completed or CompletedWithErrors host's timeline CSV, that host is shown as Unreadable instead, with the reason in its notes, and listed after the Failed hosts rather than among the clean ones. The manifest keeps the status the run recorded. It's one static file with no script and nothing loaded from the internet. Every value taken from the evidence is HTML-encoded, and a Content Security Policy blocks script outright, so a rule title like `<script>` just shows up as text. Paths are shown relative to OutputRoot, so the dashboard can be shared without giving away the case's folder layout.
 
@@ -219,7 +225,9 @@ The sample event is Security 1102, which Hayabusa's own "Log Cleared" rule detec
 
 ## Host identity from registry hives
 
-`lib\HostIdentity.ps1` reads each collection's host identity from its registry hives: the computer name, domain, OS, time zone, local users and IP addressing. It isn't part of a run yet. It doesn't change how hosts are named in the manifest or the dashboard, which still comes from the `Computer` column of Hayabusa's output.
+The tool can read each collection's host identity from its registry hives: the computer name, domain, OS, time zone, local users and IP addressing. It's separate from how hosts are named in the manifest and the triage dashboard, which still comes from the `Computer` column of Hayabusa's output.
+
+When the engagement config sets `RECmdPath`, a normal run reads each collection's identity while the collection is extracted or mounted for Hayabusa, so nothing is extracted or mounted twice, and writes `identity_dashboard.html` beside the triage dashboard at the end. Each host's progress line ends with its identity status. Without `RECmdPath`, nothing is read and a run is exactly as before. Reading identity never changes a host's status, its manifest row or run-meta: if it fails, the host's identity file says why and its triage results stand. A host a rerun skips as already finished keeps the identity it has, so run `-IdentityOnly` to read one it doesn't have yet.
 
 It runs Eric Zimmerman's RECmd, tested with version <!--tested-recmd-version-->2026.10.0<!--/tested-recmd-version-->. The tool doesn't download it. Set `RECmdPath` in the engagement config to the full path of `RECmd.exe`, or to a path relative to the config file. It must be outside the evidence: a `RECmd.exe` inside the collection being read is refused.
 
@@ -241,6 +249,22 @@ What it records, saved as `OutputRoot\<Collection>\<Collection>_identity.json`:
 - **Interfaces:** every interface in the active control set, virtual ones such as Hyper-V, WSL and VPN adapters included. Each has its address, whether it's static or from DHCP, the mask, gateway, DNS servers and DHCP server, the network name from the DHCP network hint, and the lease times. They're ordered newest lease first, and the newest leased interface with an address is flagged `LikelyActive`.
 
 Every time is UTC, in the form `2026-01-01T00:00:00Z`, in a field whose name ends in `Utc`. RECmd gives each of the times read here in UTC, so none is local only. `Status` is `Complete` when all three hives were read, `Partial` when only some were, `Failed` when none were, and `NoRegistryHives` as above. `Notes` says what was missing and why. `SchemaVersion` is 1.
+
+### Identity only
+
+`-IdentityOnly` is the quick who, what and where pass. It needs `RECmdPath` in the config given with `-ConfigPath`, and takes no `-HayabusaPath`:
+
+```powershell
+.\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
+```
+
+It finds the collections and extracts or mounts each one the same way a normal run does, with the same ZIP limits and the same hash of a disk image before it's mounted and after teardown. It reads the host's identity, tears the collection down, and then writes `identity_dashboard.html`. Disk images need an elevated session, as in a normal run. Hayabusa isn't run, and the manifest, run-meta and triage files aren't written or changed, so it can run before, after or between normal runs into the same OutputRoot. A collection whose identity is already Complete, or has no registry hives, is skipped unless `-Force` is given. A ZIP the tool can't extract is saved as Failed with the same advice as a normal run, and an image whose hash changed is warned about and noted first in that host's identity.
+
+### The identity dashboard
+
+`identity_dashboard.html` has one row per host: the registry computer name, the collection, its status, the OS and build, the domain, the time zone, the likely active address with its network name, and the interactive users. The other interfaces, newest lease first, the built-in and system accounts, and the host's notes are folded under each row, so a row stays one line until it's opened. A host with no registry hives, or whose identity couldn't be read, says so across its row. A value from a hive that wasn't read shows as not read, and one the hive doesn't hold as not found, so nothing is ever filled in.
+
+It lists every collection with an identity file, and every collection in the manifest, so a host not read yet shows as Not read. It's static like the triage dashboard: no script, nothing loaded from the internet, a Content Security Policy that blocks script, and every value HTML-encoded. It copies only the fields it shows from each identity file, so a field added to a file by hand can't appear either. The password hint, the answers to security questions and the Microsoft account name are never in an identity file to begin with. The next run with `RECmdPath` set, or with `-IdentityOnly`, rebuilds it.
 
 ### Checking a new RECmd release
 

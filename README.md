@@ -25,6 +25,7 @@ The console during the same run:
 - Resumes a case. Run the same command again and it skips the hosts already finished and picks up the rest.
 - Treats the evidence as read-only the whole way through. Each disk image is hashed with SHA-256 before it's mounted and again after teardown, both hashes go in the run's record, and a host whose image changed fails.
 - Takes an engagement config so every host in a case runs against the same settings.
+- Optionally reads each host's identity from its registry hives with RECmd, the computer name, OS, domain, time zone, local users and IP addresses, into a separate identity dashboard. `-IdentityOnly` does just that, without Hayabusa.
 
 ## Status
 
@@ -94,7 +95,7 @@ The evidence is only ever read.
 - The full list of outputs and the tool's working folders
 - Rerunning, resuming and what each status means
 - The engagement config and every setting it takes
-- Reading host identity from registry hives with RECmd
+- Reading host identity from registry hives with RECmd, the identity dashboard and `-IdentityOnly`
 - Running the tests
 
 ## Security

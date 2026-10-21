@@ -29,6 +29,12 @@
     Settings are resolved in this order: command line, then the config file
     given by -ConfigPath, then built-in defaults.
 
+    When the config sets RECmdPath, each collection's host identity is also
+    read from its registry hives with RECmd while the collection is
+    extracted or mounted, and identity_dashboard.html is written beside the
+    triage dashboard. Without RECmdPath, host identity is not read.
+    -IdentityOnly reads host identity alone, without running Hayabusa.
+
     A normal run prints one progress line per collection and a short
     summary at the end, through the information stream. Problems are
     warnings. -Verbose adds the detail. -InformationAction SilentlyContinue
@@ -64,6 +70,13 @@
     Optional engagement config file (.psd1). Loaded as data only with
     Import-PowerShellDataFile. See config\engagement.example.psd1.
 
+.PARAMETER IdentityOnly
+    Read each collection's host identity and write identity_dashboard.html,
+    without running Hayabusa or building the triage dashboard. Needs
+    RECmdPath in the config given with -ConfigPath, and no HayabusaPath.
+    A collection whose identity is already Complete is skipped unless
+    -Force is given. The manifest and run-meta are not written.
+
 .PARAMETER Help
     Print a short usage summary and stop. -h does the same. Nothing is
     read or written.
@@ -75,15 +88,20 @@
     .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -ConfigPath D:\Cases\Case01\engagement.psd1 -MinLevel medium
 
 .EXAMPLE
+    .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
+
+.EXAMPLE
     .\Invoke-BulkHayabusa.ps1 -Help
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [Parameter(Mandatory, ParameterSetName = 'Run')]
+    [Parameter(Mandatory, ParameterSetName = 'Identity')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
     [string]$InputRoot,
 
     [Parameter(Mandatory, ParameterSetName = 'Run')]
+    [Parameter(Mandatory, ParameterSetName = 'Identity')]
     [ValidateNotNullOrEmpty()]
     [string]$OutputRoot,
 
@@ -100,14 +118,20 @@ param(
     [int]$Threads,
 
     [Parameter(ParameterSetName = 'Run')]
+    [Parameter(ParameterSetName = 'Identity')]
     [switch]$Force,
 
     [Parameter(ParameterSetName = 'Run')]
+    [Parameter(ParameterSetName = 'Identity')]
     [switch]$KeepArtifacts,
 
     [Parameter(ParameterSetName = 'Run')]
+    [Parameter(ParameterSetName = 'Identity')]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$ConfigPath,
+
+    [Parameter(Mandatory, ParameterSetName = 'Identity')]
+    [switch]$IdentityOnly,
 
     # In a set of its own, so -Help binds without asking for the required
     # parameters.
@@ -137,10 +161,12 @@ if ($Help) {
         '  -Force          Rerun hosts that already finished'
         '  -KeepArtifacts  Keep extracted ZIPs and differencing disks after each host, for debugging'
         '  -ConfigPath     Engagement config .psd1 for ExactLevel, tag filters, a time window and more'
+        '  -IdentityOnly   Read host identity with RECmd only, no Hayabusa. Needs RECmdPath in the config, not -HayabusaPath'
         ''
         'Examples:'
         '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe'
         '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -MinLevel medium -ConfigPath D:\Cases\Case01\engagement.psd1'
+        '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly'
         ''
         'For the complete help: Get-Help .\Invoke-BulkHayabusa.ps1 -Full'
     )
@@ -156,14 +182,16 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $ToolVersion = '0.9.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard')) {
+foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'HostIdentity', 'IdentityDashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
 # Paths
 $InputRoot = ConvertTo-NormalizedPath -Path $InputRoot
 $OutputRoot = ConvertTo-NormalizedPath -Path $OutputRoot
-$HayabusaPath = ConvertTo-NormalizedPath -Path $HayabusaPath
+if (-not $IdentityOnly) {
+    $HayabusaPath = ConvertTo-NormalizedPath -Path $HayabusaPath
+}
 
 if (Test-PathIsWithin -Path $OutputRoot -Parent $InputRoot) {
     throw "OutputRoot ($OutputRoot) must not be inside InputRoot ($InputRoot). Output would be picked up as a host and written next to evidence."
@@ -182,12 +210,25 @@ if ($PSBoundParameters.ContainsKey('ConfigPath')) {
     Write-Verbose "Loaded config $($config.Path) (SHA256 $($config.Sha256))"
 }
 
-$commandLine = @{}
-if ($PSBoundParameters.ContainsKey('MinLevel')) {
-    $commandLine['MinLevel'] = $MinLevel
+# Host identity is read only when the config names RECmd. A RECmdPath that
+# is set but wrong stops the run here, before anything is written.
+$recmdPath = Resolve-RECmdPath -Config $config
+if ($IdentityOnly -and $null -eq $recmdPath) {
+    throw '-IdentityOnly needs RECmdPath, the full path of RECmd.exe, set in the engagement config given with -ConfigPath.'
 }
 
-$resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath
+if ($IdentityOnly) {
+    # Only the ZIP limits apply. Hayabusa and its settings aren't used.
+    $limits = Resolve-ZipLimit -Config $config
+}
+else {
+    $commandLine = @{}
+    if ($PSBoundParameters.ContainsKey('MinLevel')) {
+        $commandLine['MinLevel'] = $MinLevel
+    }
+
+    $resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath
+}
 
 $threadsValue = $null
 if ($PSBoundParameters.ContainsKey('Threads')) {
@@ -228,6 +269,43 @@ if ($imageCount -gt 0) {
     Write-Information "$imageCount disk image(s) will be hashed with SHA-256 before mounting and again after teardown, to show each is unchanged. Each hash reads the whole image, so expect a pause on a large one. Hosts already finished are skipped and not hashed."
 }
 
+if ($IdentityOnly) {
+    Write-Information "Reading host identity only, with RECmd at $recmdPath. Hayabusa is not run."
+    if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+        Write-Verbose "Created OutputRoot: $OutputRoot"
+    }
+
+    $identityBatch = Invoke-IdentityBatch -Collections $collections -OutputRoot $OutputRoot -RECmdPath $recmdPath -Limits $limits `
+        -Force:$Force -KeepArtifacts:$KeepArtifacts
+
+    $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
+    try {
+        $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection })
+        $identityRecord.Dashboard = $identityRollup.Dashboard
+        $identityRecord.HostCount = $identityRollup.HostCount
+    }
+    catch {
+        $identityRecord.Error = $_.Exception.Message
+        Write-Warning "Identity dashboard failed: $($_.Exception.Message)"
+    }
+
+    Write-Information ("Done: {0} processed, {1} complete, {2} partial, {3} failed, {4} with no registry hives, {5} skipped." -f
+        $identityBatch.Processed, $identityBatch.Complete, $identityBatch.Partial, $identityBatch.Failed, $identityBatch.NoRegistryHives, $identityBatch.Skipped)
+    if ($null -eq $identityRecord.Error) {
+        Write-Information "Output is in $OutputRoot. Open identity_dashboard.html there for host identity."
+    }
+    else {
+        Write-Information "Output is in $OutputRoot. The identity dashboard could not be built, see the warning above."
+    }
+
+    return [pscustomobject]@{
+        Summary     = $identityBatch
+        Identity    = $identityRecord
+        Collections = $collections
+    }
+}
+
 if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
     throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
 }
@@ -247,6 +325,9 @@ if ($null -ne $levelNotice) {
 }
 $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
 Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
+if ($null -ne $recmdPath) {
+    Write-Information "Host identity will also be read from each collection's registry hives, with RECmd at $recmdPath."
+}
 
 # Run setup
 if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
@@ -288,7 +369,7 @@ Write-Verbose "Run metadata: $runMetaPath"
 $imageHashes = [ordered]@{}
 $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
     -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
-    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes -RunMeta $runMeta -RunMetaPath $runMetaPath
+    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes -RunMeta $runMeta -RunMetaPath $runMetaPath -RECmdPath $recmdPath
 Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
 
 # A rollup failure is recorded and reported, and never hides the batch
@@ -307,6 +388,22 @@ catch {
     Write-Warning "Rollup failed: $($_.Exception.Message). Rebuild it with Invoke-HayabusaRollup.ps1 -OutputRoot $OutputRoot"
 }
 
+# Only when RECmd is set. Kept out of run-meta, and a failure here never
+# hides the triage results.
+$identityRecord = $null
+if ($null -ne $recmdPath) {
+    $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
+    try {
+        $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection })
+        $identityRecord.Dashboard = $identityRollup.Dashboard
+        $identityRecord.HostCount = $identityRollup.HostCount
+    }
+    catch {
+        $identityRecord.Error = $_.Exception.Message
+        Write-Warning "Identity dashboard failed: $($_.Exception.Message)"
+    }
+}
+
 $runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
 $runMeta['Summary'] = $batch
 $runMeta['Rollup'] = $rollupRecord
@@ -320,6 +417,14 @@ if ($null -eq $rollupRecord.Error) {
 else {
     Write-Information "Output is in $OutputRoot. The dashboard could not be built, see the warning above."
 }
+if ($null -ne $identityRecord) {
+    if ($null -eq $identityRecord.Error) {
+        Write-Information 'Open identity_dashboard.html there for host identity.'
+    }
+    else {
+        Write-Information 'The identity dashboard could not be built, see the warning above.'
+    }
+}
 
 [pscustomobject]@{
     RunId        = $runId
@@ -327,5 +432,6 @@ else {
     RunMetaPath  = $runMetaPath
     Summary      = $batch
     Rollup       = $rollupRecord
+    Identity     = $identityRecord
     Collections  = $collections
 }

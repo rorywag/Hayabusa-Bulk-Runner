@@ -40,8 +40,9 @@
     ZipMaxUncompressedGB = 100
     ZipMaxRatio          = 250
 
-    # Full path of Eric Zimmerman's RECmd.exe, for reading host identity from
-    # registry hives. A relative path is taken relative to this file. Runs
-    # don't use it yet.
+    # Full path of Eric Zimmerman's RECmd.exe. When set, each run also reads
+    # host identity from the registry hives and writes identity_dashboard.html,
+    # and -IdentityOnly can be used. A relative path is taken relative to this
+    # file.
     # RECmdPath = 'D:\Tools\RECmd\RECmd.exe'
 }

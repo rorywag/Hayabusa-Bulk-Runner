@@ -23,45 +23,7 @@ BeforeDiscovery {
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
     . (Join-Path $PSScriptRoot 'Helpers/RegistryHive.ps1')
-
-    $script:IdentityFixture = Join-TestPath $FixtureRoot 'identity' 'recmd'
-    $script:FixtureStamp = '20261001120000'
-    $script:fakeRECmd = Write-TestText -Path (Join-TestPath $TestDrive 'tools' 'RECmd' 'RECmd.exe') -Line @('not a binary')
-
-    function script:New-FakeHive([string]$Path) {
-        # A file that starts like a hive. RECmd is mocked, so it's never parsed.
-        New-TestDirectory -Path (Split-Path -Parent $Path) | Out-Null
-        $b = New-Object byte[] 8192
-        [System.Text.Encoding]::ASCII.GetBytes('regf').CopyTo($b, 0)
-        [System.IO.File]::WriteAllBytes($Path, $b)
-        return $Path
-    }
-
-    function script:New-HiveCollection([string]$Root, [string]$Drive = 'C', [string[]]$Hive = @('SYSTEM', 'SOFTWARE', 'SAM')) {
-        $config = Join-TestPath $Root $Drive 'Windows' 'System32' 'config'
-        foreach ($h in $Hive) { New-FakeHive -Path (Join-TestPath $config $h) | Out-Null }
-        New-TestDirectory -Path (Join-TestPath $Root $Drive 'Windows' 'System32' 'winevt' 'Logs') | Out-Null
-        return $config
-    }
-
-    function script:Get-ArgumentValue([string[]]$Argument, [string]$Name) {
-        $i = [array]::IndexOf($Argument, $Name)
-        if ($i -lt 0) { return $null }
-        return $Argument[$i + 1]
-    }
-
-    function script:Copy-FixtureOutput([string[]]$Argument) {
-        # What RECmd writes for one hive: <hive>.csv in the --csv folder and
-        # the plugin CSVs in a folder named for the run's start time.
-        $csvDir = Get-ArgumentValue $Argument '--csv'
-        $hive = [System.IO.Path]::GetFileNameWithoutExtension((Get-ArgumentValue $Argument '--csvf'))
-        Copy-Item -LiteralPath (Join-TestPath $IdentityFixture "$hive.csv") -Destination (Join-TestPath $csvDir "$hive.csv")
-        $stampDir = Join-TestPath $csvDir $FixtureStamp
-        foreach ($f in @(Get-ChildItem -LiteralPath (Join-TestPath $IdentityFixture $FixtureStamp) -File | Where-Object { $_.Name -like "$($hive)_*" })) {
-            New-TestDirectory -Path $stampDir | Out-Null
-            Copy-Item -LiteralPath $f.FullName -Destination (Join-TestPath $stampDir $f.Name)
-        }
-    }
+    . (Join-Path $PSScriptRoot 'Helpers/IdentityHelpers.ps1')
 
     function script:ConvertTo-HintValue([string]$Name) {
         # The inverse of ConvertFrom-DhcpNetworkHint, the form Windows stores.
@@ -138,7 +100,7 @@ Describe 'ConvertFrom-RECmdOutput' {
     }
 
     It 'reads each user once, ordered by RID' {
-        @($Parsed.Users | ForEach-Object { $_.Rid }) | Should -Be @(500, 501, 503, 504, 1000, 1001, 1002, 1003)
+        @($Parsed.Users | ForEach-Object { $_.Rid }) | Should -Be @(500, 501, 503, 504, 1000, 1001, 1002, 1003, 1004)
     }
 
     It 'classifies <Name> as <Type>' -ForEach @(
@@ -150,6 +112,7 @@ Describe 'ConvertFrom-RECmdOutput' {
         @{ Name = 'alice.fake'; Type = 'Interactive' }
         @{ Name = 'bob.fake'; Type = 'Interactive' }
         @{ Name = 'HomeGroupUser$'; Type = 'System' }
+        @{ Name = 'WsiAccount'; Type = 'System' }
     ) {
         $u = @($Parsed.Users | Where-Object { $_.UserName -ceq $Name })
         $u.Count | Should -Be 1
@@ -272,6 +235,39 @@ Describe 'ConvertFrom-RECmdOutput' {
         }
         $p.Hostname | Should -BeExactly 'FAKE-HOST-01'
         @($p.Interfaces).Count | Should -Be 4
+    }
+}
+
+Describe 'Get-UserAccountType' {
+    BeforeAll {
+        function script:New-UserFlag([switch]$Normal, [string]$Set) {
+            $f = [ordered]@{}
+            foreach ($n in $UserFlagColumns) { $f[$n] = $false }
+            $f['NormalUserAccount'] = $Normal.IsPresent
+            if ($Set) { $f[$Set] = $true }
+            return $f
+        }
+    }
+
+    It 'classes WsiAccount, RID 1004 with the normal user account flag and no trust flag, as System' {
+        $t = Get-UserAccountType -Rid 1004 -UserName 'WsiAccount' -Flags (New-UserFlag -Normal)
+        $t.Type | Should -BeExactly 'System'
+        $t.Reason | Should -BeExactly 'An account Windows or other software manages.'
+        (Get-UserAccountType -Rid 1004 -UserName 'wsiaccount' -Flags (New-UserFlag -Normal)).Type | Should -BeExactly 'System'
+    }
+
+    It 'classes HelpAssistant, the Remote Assistance account on older hosts, as System' {
+        (Get-UserAccountType -Rid 1000 -UserName 'HelpAssistant' -Flags (New-UserFlag -Normal)).Type | Should -BeExactly 'System'
+    }
+
+    It 'still classes <Why>' -ForEach @(
+        @{ Why = 'a normal account with a RID of 1000 or more as Interactive'; Rid = 1005; Name = 'carol.fake'; Normal = $true; Set = ''; Type = 'Interactive' }
+        @{ Why = 'a name that only starts like WsiAccount as Interactive'; Rid = 1006; Name = 'WsiAccountant'; Normal = $true; Set = ''; Type = 'Interactive' }
+        @{ Why = 'a RID under 1000 as BuiltIn'; Rid = 500; Name = 'Administrator'; Normal = $true; Set = ''; Type = 'BuiltIn' }
+        @{ Why = 'a trust account as System'; Rid = 1007; Name = 'WS01'; Normal = $true; Set = 'WorkstationTrustAccount'; Type = 'System' }
+        @{ Why = 'an account without the normal user flag as System'; Rid = 1008; Name = 'odd.fake'; Normal = $false; Set = ''; Type = 'System' }
+    ) {
+        (Get-UserAccountType -Rid $Rid -UserName $Name -Flags (New-UserFlag -Normal:$Normal -Set $Set)).Type | Should -BeExactly $Type
     }
 }
 
@@ -521,7 +517,7 @@ Describe 'Get-HostIdentity with RECmd mocked' {
         $id.SchemaVersion | Should -Be $HostIdentitySchemaVersion
         $id.Collection | Should -BeExactly 'HOST01'
         $id.Hostname | Should -BeExactly 'FAKE-HOST-01'
-        @($id.Users).Count | Should -Be 8
+        @($id.Users).Count | Should -Be 9
         @($id.Interfaces).Count | Should -Be 4
         $id.ExtractedUtc | Should -Match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
         $id.Source.RECmdVersion | Should -BeExactly $TestedRECmdVersion
@@ -585,8 +581,8 @@ Describe 'Get-HostIdentity with RECmd mocked' {
         $id = Get-HostIdentity -Collection 'HOST04' -CollectionRoot $root -OutputRoot $out -RECmdPath $fakeRECmd
         $id.Status | Should -BeExactly 'Failed'
         $id.Source.RECmdVersion | Should -BeExactly '2099.1.0'
-        @($id.Notes | Where-Object { $_ -like "RECmd 2099.1.0 is not the version this tool was tested with ($TestedRECmdVersion)*" }).Count | Should -Be 1
-        @($id.Notes | Where-Object { $_ -like 'RECmd read nothing from SAM (exit code 1).' }).Count | Should -Be 1
+        @($id.Notes | Where-Object { $_ -like "RECmd 2099.1.0 is not the version this tool was tested with, which is $TestedRECmdVersion.*" }).Count | Should -Be 1
+        @($id.Notes | Where-Object { $_ -eq 'RECmd read nothing from SAM. It exited with code 1.' }).Count | Should -Be 1
         Get-WorkFolder $out | Should -BeNullOrEmpty
     }
 
