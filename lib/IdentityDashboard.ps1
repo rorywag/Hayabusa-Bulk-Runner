@@ -483,7 +483,7 @@ function New-IdentityDashboardHtml {
             [void]$sb.AppendLine("<tr><td class=`"nm`">$hostCell</td><td>$(& $e $h.Collection)</td><td>$statusCell</td><td>$osCell</td><td>$domainCell</td><td>$tzCell</td><td class=`"nm`">$ipCell</td><td>$userCell</td></tr>")
         }
         [void]$sb.AppendLine('</tbody></table></div>')
-        [void]$sb.AppendLine('<p class="dim">Hostname is the ComputerName in the registry, which can differ from the computer names in the triage dashboard. Active IP is the interface with the newest DHCP lease, or the only one with an address. The other interfaces, newest lease first, and the built-in and system accounts are folded under each row. Not read means the hive holding that value was not read. Time zone offsets are the ones in force when the hive was last written.</p>')
+        [void]$sb.AppendLine('<p class="dim">Hostname is the ComputerName in the registry, which can differ from the computer names in the triage dashboard. Active IP is the interface with a network name and the newest DHCP lease, or, when no interface has a network name, the newest leased one with an address. The other interfaces, newest lease first, and the built-in and system accounts are folded under each row. Not read means the hive holding that value was not read. Time zone offsets are the ones in force when the hive was last written.</p>')
     }
 
     [void]$sb.AppendLine("<footer>Files beside $(& $e $script:IdentityDashboardName): one Collection_identity.json in each collection's folder. Times are UTC.</footer>")

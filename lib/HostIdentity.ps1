@@ -10,7 +10,7 @@
 # tests\HostIdentity.Tests.ps1, raise this and the values between the
 # tested-recmd-version markers in docs/USAGE.md. This is the only place the
 # tested version is set, and a test checks the docs markers match it.
-$script:TestedRECmdVersion = '2026.10.0'
+$script:TestedRECmdVersion = '2026.5.0'
 
 $script:HostIdentitySchemaVersion = 1
 
@@ -32,7 +32,7 @@ $script:HiveSearchDepth = 3
 $script:MaxHiveBytes = 2GB
 
 # RECmd prints this at the start of every run, for example
-# "RECmd version 2026.10.0".
+# "RECmd version 2026.5.0".
 $script:RECmdVersionPattern = 'RECmd version (\d+(?:\.\d+)+)'
 
 # Printed when a hive is dirty and has no transaction logs beside it.
@@ -1083,10 +1083,14 @@ function Get-IdentityInterface {
         from the DHCP network hint for the interface's current lease.
 
         Interfaces with a lease come first, newest first, then those with
-        an address, then the rest. LikelyActive marks the first interface
-        with both a lease and an address, or the only interface with an
-        address when none has a lease. Virtual interfaces, such as Hyper-V,
-        WSL and VPN adapters, are all kept.
+        an address, then the rest. LikelyActive marks the interface with an
+        address and a network name with the newest lease, or the only one
+        with an address and a network name. When no interface with an
+        address has a network name, it marks the newest leased interface
+        with an address, or the only interface with an address. Virtual
+        interfaces, such as Hyper-V, WSL and VPN adapters, are all kept,
+        and since they have no network name, one is only marked when no
+        named interface has an address.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -1223,12 +1227,24 @@ function Get-IdentityInterface {
             @{ Expression = { $_.Guid } }
         ))
 
-    $active = @($ordered | Where-Object { $null -ne $_.LeaseObtainedUtc -and $null -ne $_.Address }) | Select-Object -First 1
+    # A network name marks a real connection. Hyper-V, WSL and other
+    # virtual adapters have none, however new their lease, so a named one
+    # is preferred. The list stays in lease order either way.
+    $addressed = @($ordered | Where-Object { $null -ne $_.Address })
+    $named = @($addressed | Where-Object { $null -ne $_.NetworkName })
+    $active = $null
+    $namedLeased = @($named | Where-Object { $null -ne $_.LeaseObtainedUtc })
+    if ($namedLeased.Count -gt 0) {
+        $active = $namedLeased[0]
+    }
+    elseif ($named.Count -eq 1) {
+        $active = $named[0]
+    }
     if ($null -eq $active) {
-        $withAddress = @($ordered | Where-Object { $null -ne $_.Address })
-        if ($withAddress.Count -eq 1) {
-            $active = $withAddress[0]
-        }
+        $active = @($addressed | Where-Object { $null -ne $_.LeaseObtainedUtc }) | Select-Object -First 1
+    }
+    if ($null -eq $active -and $addressed.Count -eq 1) {
+        $active = $addressed[0]
     }
     if ($null -ne $active) {
         $active.LikelyActive = $true
@@ -1432,6 +1448,22 @@ function Invoke-RECmdHive {
     }
 }
 
+function Copy-IdentityFile {
+    # Copies a hive or log into the work folder, as a plain writable file.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$Destination
+    )
+
+    $target = Get-ExtendedLengthPath -Path $Destination
+    [System.IO.File]::Copy((Get-ExtendedLengthPath -Path $Source), $target)
+    [System.IO.File]::SetAttributes($target, [System.IO.FileAttributes]::Normal)
+}
+
 function New-HostIdentityRecord {
     <#
     .SYNOPSIS
@@ -1565,12 +1597,16 @@ function Get-HostIdentity {
             $present++
 
             # Each hive gets its own folder, so RECmd finds only its own logs.
+            # A copy keeps its source's ReadOnly attribute, which every file
+            # on a mounted image has, and Windows won't delete a read-only
+            # file, so it's cleared on each copy for the work folder to come
+            # down. Only the copies are touched, never the evidence.
             $hiveDir = New-Item -ItemType Directory -Path (Join-Path -Path $hivesDir -ChildPath $name) -Force
             $copy = Join-Path -Path $hiveDir.FullName -ChildPath $name
-            [System.IO.File]::Copy((Get-ExtendedLengthPath -Path $source), (Get-ExtendedLengthPath -Path $copy))
+            Copy-IdentityFile -Source $source -Destination $copy
             foreach ($log in $found.Logs[$name]) {
                 $logCopy = Join-Path -Path $hiveDir.FullName -ChildPath ($name + [System.IO.Path]::GetExtension($log).ToUpperInvariant())
-                [System.IO.File]::Copy((Get-ExtendedLengthPath -Path $log), (Get-ExtendedLengthPath -Path $logCopy))
+                Copy-IdentityFile -Source $log -Destination $logCopy
             }
             $entry.Sha256 = (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash
 

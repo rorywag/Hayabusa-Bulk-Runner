@@ -193,8 +193,32 @@ function Remove-DirectoryTree {
         if this runtime refuses the prefix. Directory.Delete removes links
         rather than following them. Callers check the folder's bounds and
         ShouldProcess first.
+
+        Windows won't delete a read-only file, and a file copied or
+        extracted from a read-only image can keep that attribute. If the
+        delete is refused, ReadOnly is cleared on everything in the folder,
+        links left alone, and the delete is tried once more.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Callers check ShouldProcess and the folder bounds first.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    try {
+        Remove-DirectoryTreeOnce -Path $Path
+    }
+    catch [System.UnauthorizedAccessException] {
+        Write-Verbose "Delete of $Path was refused. Clearing ReadOnly in it and trying again."
+        Clear-ReadOnlyAttribute -Path $Path
+        Remove-DirectoryTreeOnce -Path $Path
+    }
+}
+
+function Remove-DirectoryTreeOnce {
+    # One attempt at the delete, through the prefixed path where it applies.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Called by Remove-DirectoryTree, whose callers check ShouldProcess.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -212,6 +236,52 @@ function Remove-DirectoryTree {
         }
     }
     [System.IO.Directory]::Delete($Path, $true)
+}
+
+function Clear-ReadOnlyAttribute {
+    <#
+    .SYNOPSIS
+        Clears ReadOnly on a folder and everything in it.
+    .DESCRIPTION
+        Only for the tool's own working folders, before deleting them.
+        A link, a junction or a symbolic link, is neither followed nor
+        changed, so nothing outside the folder, such as evidence a link
+        points at, is touched.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Called by Remove-DirectoryTree, whose callers check ShouldProcess.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $root = Get-ExtendedLengthPath -Path $Path -Always
+    try {
+        $null = [System.IO.File]::GetAttributes($root)
+    }
+    catch [System.ArgumentException], [System.NotSupportedException] {
+        $root = $Path
+    }
+
+    $readOnly = [System.IO.FileAttributes]::ReadOnly
+    $link = [System.IO.FileAttributes]::ReparsePoint
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($root)
+    while ($stack.Count -gt 0) {
+        $item = $stack.Pop()
+        $attributes = [System.IO.File]::GetAttributes($item)
+        if (($attributes -band $link) -ne 0) {
+            continue
+        }
+        if (($attributes -band $readOnly) -ne 0) {
+            [System.IO.File]::SetAttributes($item, ($attributes -band (-bnot $readOnly)))
+        }
+        if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+            foreach ($child in [System.IO.Directory]::GetFileSystemEntries($item)) {
+                $stack.Push($child)
+            }
+        }
+    }
 }
 
 function Get-FileTree {

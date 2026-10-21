@@ -271,6 +271,48 @@ Describe 'Get-UserAccountType' {
     }
 }
 
+Describe 'Likely active interface' {
+    BeforeAll {
+        $script:ifKey = 'controlset001\services\tcpip\parameters\interfaces'
+        function script:New-InterfaceTable([hashtable[]]$Interface) {
+            # Raw values as Get-RECmdValueTable gives them, keyed in lower case.
+            $t = @{ 'select' = @{ current = '1' } }
+            foreach ($i in $Interface) {
+                $v = @{ enabledhcp = '1'; dhcpipaddress = $i.Address; leaseobtainedtime = [string]$i.Lease }
+                if ($i.Name) { $v['dhcpnetworkhint'] = ConvertTo-HintValue $i.Name }
+                $t["$ifKey\$($i.Guid)"] = $v
+            }
+            return $t
+        }
+        $script:vEth = @{ Guid = '{a0000000-0000-4000-8000-00000000000a}'; Address = '172.20.0.5'; Lease = 1790000000 }
+        $script:wifi = @{ Guid = '{b0000000-0000-4000-8000-00000000000b}'; Address = '192.0.2.50'; Lease = 1788000000; Name = 'FAKE-WIFI' }
+    }
+
+    It 'flags the named interface over a virtual adapter with a newer lease and no network name, keeping lease order' {
+        $list = @(Get-IdentityInterface -System (New-InterfaceTable @($vEth, $wifi)) -ControlSet 'ControlSet001')
+        @($list | ForEach-Object { $_.Address }) | Should -Be @('172.20.0.5', '192.0.2.50') -Because 'the list stays newest lease first'
+        @($list | Where-Object { $_.LikelyActive } | ForEach-Object { $_.Address }) | Should -Be @('192.0.2.50')
+    }
+
+    It 'still flags the newest leased interface with an address when none has a network name' {
+        $unnamed = $wifi.Clone(); $unnamed.Remove('Name')
+        $list = @(Get-IdentityInterface -System (New-InterfaceTable @($vEth, $unnamed)) -ControlSet 'ControlSet001')
+        @($list | Where-Object { $_.LikelyActive } | ForEach-Object { $_.Address }) | Should -Be @('172.20.0.5')
+    }
+
+    It 'takes the newest lease among several named interfaces' {
+        $lan = @{ Guid = '{c0000000-0000-4000-8000-00000000000c}'; Address = '198.51.100.23'; Lease = 1789000000; Name = 'FAKE-LAN' }
+        $list = @(Get-IdentityInterface -System (New-InterfaceTable @($vEth, $wifi, $lan)) -ControlSet 'ControlSet001')
+        @($list | Where-Object { $_.LikelyActive } | ForEach-Object { $_.Address }) | Should -Be @('198.51.100.23')
+    }
+
+    It 'never flags a named interface that has no address' {
+        $gone = @{ Guid = '{d0000000-0000-4000-8000-00000000000d}'; Address = $null; Lease = 1795000000; Name = 'FAKE-OLD' }
+        $list = @(Get-IdentityInterface -System (New-InterfaceTable @($vEth, $gone)) -ControlSet 'ControlSet001')
+        @($list | Where-Object { $_.LikelyActive } | ForEach-Object { $_.Address }) | Should -Be @('172.20.0.5')
+    }
+}
+
 Describe 'Active control set' {
     It 'falls back to the only control set when Select\Current is missing, and says so' {
         $cs = Get-ActiveControlSet -System @{ 'controlset003\control\computername\computername' = @{ computername = 'X' } }
@@ -539,6 +581,40 @@ Describe 'Get-HostIdentity with RECmd mocked' {
         $after = Get-FileHashMap -Path $root
         $after.Count | Should -Be $before.Count
         foreach ($k in $before.Keys) { $after[$k] | Should -BeExactly $before[$k] }
+    }
+
+    It 'clears ReadOnly on the copies of a read-only hive, so its work folder still comes down' {
+        $root = Join-TestPath $TestDrive 'e2e-readonly' 'HOST01'
+        $config = New-HiveCollection -Root $root
+        Write-TestText -Path (Join-TestPath $config 'SAM.LOG1') -Line @('log') | Out-Null
+        $sources = @(Get-ChildItem -LiteralPath $config -File | ForEach-Object { $_.FullName })
+        foreach ($f in $sources) { [System.IO.File]::SetAttributes($f, [System.IO.FileAttributes]::ReadOnly) }
+        $before = Get-FileHashMap -Path $root
+        $out = Join-TestPath $TestDrive 'e2e-readonly-out'
+        $script:copyReadOnly = New-Object System.Collections.Generic.List[string]
+        Mock Invoke-RECmd {
+            $hive = Get-ArgumentValue $Argument '-f'
+            foreach ($f in @(Get-ChildItem -LiteralPath (Split-Path -Parent $hive) -File)) {
+                if (([System.IO.File]::GetAttributes($f.FullName) -band [System.IO.FileAttributes]::ReadOnly) -ne 0) { $script:copyReadOnly.Add($f.Name) }
+            }
+            Copy-FixtureOutput -Argument $Argument
+            [pscustomobject]@{ ExitCode = 0; Output = @($recmdVersionLine) }
+        }
+        try {
+            $id = Get-HostIdentity -Collection 'HOST01' -CollectionRoot $root -OutputRoot $out -RECmdPath $fakeRECmd -WarningVariable w -WarningAction SilentlyContinue
+            $id.Status | Should -BeExactly 'Complete'
+            $copyReadOnly.Count | Should -Be 0 -Because 'each hive and log copy is a plain file'
+            @($w | Where-Object { "$_" -like '*work folder*' }).Count | Should -Be 0
+            Get-WorkFolder $out | Should -BeNullOrEmpty
+            foreach ($f in $sources) {
+                ([System.IO.File]::GetAttributes($f) -band [System.IO.FileAttributes]::ReadOnly) | Should -Be ([System.IO.FileAttributes]::ReadOnly) -Because 'the evidence keeps its attributes'
+            }
+            $after = Get-FileHashMap -Path $root
+            foreach ($k in $before.Keys) { $after[$k] | Should -BeExactly $before[$k] }
+        }
+        finally {
+            foreach ($f in $sources) { [System.IO.File]::SetAttributes($f, [System.IO.FileAttributes]::Normal) }
+        }
     }
 
     It 'returns NoRegistryHives, without running RECmd, for a collection of event logs only' {
