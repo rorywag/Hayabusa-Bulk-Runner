@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-21
+
 ### Added
 
 - `Profile` accepts any output profile the Hayabusa binary offers whose columns include `Level`, `Computer` and `RuleTitle`, the columns the triage dashboard reads, not just `standard` and `verbose`. The list is read from `config\profiles.yaml` beside `hayabusa.exe` at startup, checking each profile's column headers. A profile Hayabusa doesn't offer is refused, naming the ones it does, and so is one whose columns lack one of the three, naming the column it lacks. If `profiles.yaml` can't be read, the run warns and allows only `standard` and `verbose`, as before. The default is still `standard`, and run-meta still records the profile used. The compatibility self-test has a new `profiles` check that lists which profiles a release offers and which of them the tool accepts.
@@ -112,7 +114,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.7.0...v0.8.0

@@ -6,20 +6,6 @@ Hayabusa already takes a whole directory with `-d`, and its HTML summary breaks 
 
 **Full usage reference: [docs/USAGE.md](docs/USAGE.md)**
 
-## Screenshots
-
-The dashboard after a run over eight hosts, with the severity floor at medium:
-
-![Triage dashboard: severity totals, the top rules, every rule that fired and the hosts it fired on, then one row per host, worst first](docs/images/dashboard.png)
-
-The console during the same run:
-
-![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
-
-The host identity dashboard, an example built from synthetic data with made-up hosts, accounts and addresses. One workstation's other interfaces and its built-in and system accounts are unfolded:
-
-![Host identity dashboard: one row per host with its registry computer name, OS and build, domain, time zone, likely active address and network name, and interactive users, including a Partial host whose users weren't read and a collection with no registry hives](docs/images/identity_dashboard.png)
-
 ## What it does
 
 - Runs Hayabusa once per host, so each host gets its own HTML report, CSV timeline and log instead of one combined output.
@@ -30,6 +16,20 @@ The host identity dashboard, an example built from synthetic data with made-up h
 - Treats the evidence as read-only the whole way through. Each disk image is hashed with SHA-256 before it's mounted and again after teardown, both hashes go in the run's record, and a host whose image changed fails.
 - Takes an engagement config so every host in a case runs against the same settings.
 - Optionally reads each host's identity from its registry hives with RECmd, the computer name, OS, domain, time zone, local users and IP addresses, into a separate identity dashboard. `-IdentityOnly` does just that, without Hayabusa. See [Host identity](#host-identity).
+
+## Screenshots
+
+The dashboard after a run over eight hosts, with the severity floor at medium:
+
+![Triage dashboard: severity totals, the top rules, every rule that fired and the hosts it fired on, then one row per host, worst first](docs/images/dashboard.png)
+
+The console during the same run:
+
+![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
+
+The host identity dashboard, over a six-host domain, with one workstation's other interfaces and its built-in and system accounts unfolded:
+
+![Host identity dashboard: one row per host with its registry computer name, OS and build, domain, time zone, likely active address and network name, and interactive users, including a Partial host whose users weren't read and a collection with no registry hives](docs/images/identity_dashboard.png)
 
 ## Status
 
