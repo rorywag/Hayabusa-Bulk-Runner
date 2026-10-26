@@ -23,9 +23,10 @@ $script:HostIdentityBatchPath = Join-Path -Path $PSScriptRoot -ChildPath 'HostId
 $script:IdentityHiveNames = @('SYSTEM', 'SOFTWARE', 'SAM')
 
 # How many folders down from the collection root the Windows folder may
-# be: the root itself, a KAPE drive letter folder such as C, or a folder
-# holding that, such as HOST01\C.
-$script:HiveSearchDepth = 3
+# be: the root itself, a KAPE drive letter folder such as C, a folder
+# holding that, such as HOST01\C, or a Velociraptor offline collection's
+# data\uploads\auto\C%3A, four down, with a little to spare.
+$script:HiveSearchDepth = 6
 
 # RECmd reads a whole hive into memory. A real SOFTWARE hive is well under
 # this, so a bigger file is not taken to be a hive.
@@ -90,8 +91,10 @@ function Find-RegistryHive {
         Finds SYSTEM, SOFTWARE and SAM under a collection root.
     .DESCRIPTION
         Looks for Windows\System32\config, in any case, at the root or up
-        to a few folders down, which covers the drive letter folder KAPE
-        writes, such as C\Windows. Links are not followed. Each hive must
+        to six folders down. That covers the drive letter folder KAPE
+        writes, such as C\Windows, and the deeper one a Velociraptor
+        offline collection writes, data\uploads\auto\C%3A\Windows. Links
+        are not followed. Each hive must
         start with the regf signature and be no bigger than a hive can be.
         Its .LOG, .LOG1 and .LOG2 files beside it are listed too. Nothing
         is written.

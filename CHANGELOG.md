@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Host identity now finds the registry hives in a Velociraptor offline collection, which keeps them at `data\uploads\auto\C%3A\Windows\System32\config`. The search went only three folders below the collection root, so such a collection was recorded as `NoRegistryHives` with its hives present. It now goes up to six, and still stops at the first level holding hives, so a KAPE collection is searched no deeper than before.
+
 ## [0.10.0] - 2026-10-21
 
 ### Added
