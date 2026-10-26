@@ -429,10 +429,39 @@ Describe 'Find-RegistryHive' {
         @($f.Notes | Where-Object { $_ -like '*More than one*' }).Count | Should -Be 1
     }
 
-    It 'does not look deeper than a few folders down' {
+    It 'finds the hives in a Velociraptor offline collection, under data\uploads\auto\C%3A' {
+        $root = Join-TestPath $TestDrive 'find-velociraptor' 'HOST01'
+        $config = New-HiveCollection -Root (Join-TestPath $root 'data' 'uploads' 'auto') -Drive 'C%3A'
+        Write-TestText -Path (Join-TestPath $root 'client_info.json') -Line @('{}') | Out-Null
+        New-TestDirectory (Join-TestPath $root 'results') | Out-Null
+        $f = Find-RegistryHive -Root $root
+        $f.Found | Should -BeTrue
+        $f.ConfigDirectory | Should -Be $config
+        foreach ($h in 'SYSTEM', 'SOFTWARE', 'SAM') {
+            $f.Hives[$h] | Should -Be (Join-TestPath $config $h)
+        }
+        Get-RelativeIdentityPath -Root $root -Path $f.ConfigDirectory | Should -Be (Join-TestPath 'data' 'uploads' 'auto' 'C%3A' 'Windows' 'System32' 'config')
+    }
+
+    It 'finds a Windows folder six folders down, the deepest it looks' {
+        $root = Join-TestPath $TestDrive 'find-six'
+        New-HiveCollection -Root (Join-TestPath $root 'a' 'b' 'c' 'd' 'e') | Out-Null
+        (Find-RegistryHive -Root $root).Found | Should -BeTrue
+    }
+
+    It 'does not look deeper than six folders down' {
         $root = Join-TestPath $TestDrive 'find-deep'
-        New-HiveCollection -Root (Join-TestPath $root 'a' 'b' 'c' 'd') | Out-Null
+        New-HiveCollection -Root (Join-TestPath $root 'a' 'b' 'c' 'd' 'e' 'f') | Out-Null
         (Find-RegistryHive -Root $root).Found | Should -BeFalse
+    }
+
+    It 'stops at the first level holding hives, so a deeper copy is never used' {
+        $root = Join-TestPath $TestDrive 'find-first'
+        $kape = New-HiveCollection -Root $root -Drive 'C'
+        New-HiveCollection -Root (Join-TestPath $root 'C' 'Users' 'x' 'copy') | Out-Null
+        $f = Find-RegistryHive -Root $root
+        $f.ConfigDirectory | Should -Be $kape
+        @($f.Notes | Where-Object { $_ -like '*More than one*' }).Count | Should -Be 0
     }
 }
 
