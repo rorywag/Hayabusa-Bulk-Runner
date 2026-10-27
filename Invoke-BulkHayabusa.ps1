@@ -179,7 +179,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
     $InformationPreference = 'Continue'
 }
 
-$ToolVersion = '0.10.0'
+$ToolVersion = '0.10.1'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
 foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'HostIdentity', 'IdentityDashboard')) {
