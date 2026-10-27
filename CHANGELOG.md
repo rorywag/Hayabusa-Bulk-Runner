@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-27
+
 ### Fixed
 
 - Host identity now finds the registry hives in a Velociraptor offline collection, which keeps them at `data\uploads\auto\C%3A\Windows\System32\config`. The search went only three folders below the collection root, so such a collection was recorded as `NoRegistryHives` with its hives present. It now goes up to six, and still stops at the first level holding hives, so a KAPE collection is searched no deeper than before.
@@ -118,7 +120,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.0...v0.8.1
