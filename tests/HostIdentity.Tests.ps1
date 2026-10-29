@@ -646,6 +646,55 @@ Describe 'Get-HostIdentity with RECmd mocked' {
         }
     }
 
+    It 'rebuilds a hive and a log stored sparse before RECmd reads them, and records the hash as collected' {
+        $root = Join-TestPath $TestDrive 'e2e-sparse' 'HOST01'
+        $config = Join-TestPath $root 'data' 'uploads' 'auto' 'C%3A' 'Windows' 'System32' 'config'
+        $hiveHead = New-TestPattern 8192 21
+        [System.Text.Encoding]::ASCII.GetBytes('regf').CopyTo($hiveHead, 0)
+        $system = New-SparseTestFile -Path (Join-TestPath $config 'SYSTEM') -Segment @($hiveHead, 4096, (New-TestPattern 6000 22), 2048)
+        $log1 = New-SparseTestFile -Path (Join-TestPath $config 'SYSTEM.LOG1') -Segment @((New-TestPattern 1500 23), 3000, (New-TestPattern 700 24))
+        [System.IO.File]::WriteAllBytes((Join-TestPath $config 'SYSTEM.LOG2'), (New-TestPattern 900 25))
+        New-FakeHive -Path (Join-TestPath $config 'SOFTWARE') | Out-Null
+        New-FakeHive -Path (Join-TestPath $config 'SAM') | Out-Null
+        Write-TestText -Path (Join-TestPath $config 'SAM.idx') -Line @('not an index') | Out-Null
+        $before = Get-FileHashMap -Path $root
+        $out = Join-TestPath $TestDrive 'e2e-sparse-out'
+        $script:seenFiles = @{}
+        Mock Invoke-RECmd {
+            $hive = Get-ArgumentValue $Argument '-f'
+            foreach ($f in @(Get-ChildItem -LiteralPath (Split-Path -Parent $hive) -File)) {
+                $script:seenFiles[$f.Name] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+            }
+            Copy-FixtureOutput -Argument $Argument
+            [pscustomobject]@{ ExitCode = 0; Output = @($recmdVersionLine) }
+        }
+        $sha = { param([byte[]]$b) $h = [System.Security.Cryptography.SHA256]::Create(); try { ([System.BitConverter]::ToString($h.ComputeHash($b))).Replace('-', '') } finally { $h.Dispose() } }
+
+        $id = Get-HostIdentity -Collection 'HOST01' -CollectionRoot $root -OutputRoot $out -RECmdPath $fakeRECmd
+
+        $id.Status | Should -BeExactly 'Complete'
+        $id.SchemaVersion | Should -Be 2
+        $seenFiles['SYSTEM'] | Should -BeExactly (& $sha $system) -Because 'RECmd reads the hive rebuilt at its original size'
+        $seenFiles['SYSTEM.LOG1'] | Should -BeExactly (& $sha $log1) -Because 'a log is rebuilt from its own index'
+        $seenFiles['SYSTEM.LOG2'] | Should -BeExactly $before[(Join-TestPath $config 'SYSTEM.LOG2')] -Because 'a log with no index is copied as is'
+        $seenFiles.Keys | Should -Not -Contain 'SYSTEM.idx'
+        $s = $id.Source.Hives['SYSTEM']
+        $s.Rehydrated | Should -BeTrue
+        @($s.RehydratedTransactionLogs) | Should -Be @('SYSTEM.LOG1')
+        @($s.TransactionLogs) | Should -Be @('SYSTEM.LOG1', 'SYSTEM.LOG2')
+        $s.Sha256 | Should -BeExactly $before[(Join-TestPath $config 'SYSTEM')] -Because 'the hash is of the file as collected, not the rebuilt copy'
+        $s.Sha256 | Should -Not -Be (& $sha $system)
+        $id.Source.Hives['SOFTWARE'].Rehydrated | Should -BeFalse
+        $id.Source.Hives['SAM'].Rehydrated | Should -BeFalse
+        @($id.Notes) | Should -Contain 'SYSTEM was stored sparse, so it was rebuilt from its sparse index before RECmd read it.'
+        @($id.Notes) | Should -Contain 'SYSTEM.LOG1 was stored sparse, so it was rebuilt from its sparse index before RECmd replayed it.'
+        @($id.Notes | Where-Object { $_ -like "The sparse index beside SAM, SAM.idx, couldn't be used: it isn't valid JSON. SAM was copied as collected*" }).Count | Should -Be 1
+        Get-WorkFolder $out | Should -BeNullOrEmpty
+        $after = Get-FileHashMap -Path $root
+        $after.Count | Should -Be $before.Count
+        foreach ($k in $before.Keys) { $after[$k] | Should -BeExactly $before[$k] }
+    }
+
     It 'returns NoRegistryHives, without running RECmd, for a collection of event logs only' {
         $root = Join-TestPath $TestDrive 'e2e-evtx' 'HOST02'
         Write-TestText -Path (Join-TestPath $root 'C' 'Windows' 'System32' 'winevt' 'Logs' 'Security.txt') -Line @('x') | Out-Null
@@ -728,6 +777,18 @@ Describe 'Get-HostIdentity with RECmd mocked' {
             Get-HostIdentity -Collection 'HOST07' -CollectionRoot $root -OutputRoot (Join-TestPath $TestDrive 'e2e-strict-out') -RECmdPath $fakeRECmd
         }
         $id.Status | Should -BeExactly 'Complete'
+    }
+}
+
+Describe 'Read-HostIdentity' {
+    It 'still reads an identity file from schema version 1, and refuses one it does not know' {
+        $out = New-TestDirectory (Join-TestPath $TestDrive 'read-v1')
+        Write-TestText -Path (Join-TestPath $out 'OLD' 'OLD_identity.json') -Line @('{"SchemaVersion":1,"Collection":"OLD","Status":"Complete","Hostname":"FAKE-OLD-01"}') | Out-Null
+        Write-TestText -Path (Join-TestPath $out 'NEW' 'NEW_identity.json') -Line @('{"SchemaVersion":99,"Collection":"NEW","Status":"Complete"}') | Out-Null
+        $old = Read-HostIdentity -OutputRoot $out -Collection 'OLD'
+        $old.Error | Should -BeNullOrEmpty
+        $old.Identity.Hostname | Should -BeExactly 'FAKE-OLD-01'
+        (Read-HostIdentity -OutputRoot $out -Collection 'NEW').Error | Should -BeLike '*schema version*'
     }
 }
 

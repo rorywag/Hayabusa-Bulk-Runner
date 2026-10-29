@@ -12,7 +12,12 @@
 # tested version is set, and a test checks the docs markers match it.
 $script:TestedRECmdVersion = '2026.5.0'
 
-$script:HostIdentitySchemaVersion = 1
+$script:HostIdentitySchemaVersion = 2
+
+# Identity files this tool can read. Version 2 added Rehydrated and
+# RehydratedTransactionLogs to each hive's entry under Source, so a
+# version 1 file holds everything the dashboard shows.
+$script:ReadableHostIdentitySchemaVersions = @(1, 2)
 
 # Deep enough for every nested object in the identity file.
 $script:HostIdentityJsonDepth = 10
@@ -1452,8 +1457,21 @@ function Invoke-RECmdHive {
 }
 
 function Copy-IdentityFile {
-    # Copies a hive or log into the work folder, as a plain writable file.
+    <#
+    .SYNOPSIS
+        Copies a hive or log into the work folder, as a plain writable file,
+        rebuilding it first if it was stored sparse.
+    .DESCRIPTION
+        A file with a sparse index beside it, <name>.idx as a Velociraptor
+        offline collector writes, is rebuilt at its original size from the
+        index, so its offsets are right again for RECmd. A file without one
+        is copied byte for byte. If the index can't be used, the file is
+        copied as collected and a note says why, the way a dirty hive with
+        no logs is still read. The evidence is only ever read. Returns
+        Rehydrated and Notes.
+    #>
     [CmdletBinding()]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
         [string]$Source,
@@ -1462,9 +1480,57 @@ function Copy-IdentityFile {
         [string]$Destination
     )
 
+    $result = [pscustomobject]@{
+        Rehydrated = $false
+        Notes      = @()
+    }
     $target = Get-ExtendedLengthPath -Path $Destination
-    [System.IO.File]::Copy((Get-ExtendedLengthPath -Path $Source), $target)
+    $leaf = [System.IO.Path]::GetFileName($Source)
+    $indexPath = Get-SparseIndexPath -Path $Source
+    if ($null -ne $indexPath) {
+        $indexLeaf = [System.IO.Path]::GetFileName($indexPath)
+        $index = Read-SparseIndex -Path $indexPath -MaxBytes $script:MaxHiveBytes
+        if ($null -ne $index.Error) {
+            $result.Notes = @("The sparse index beside $leaf, $indexLeaf, couldn't be used: $($index.Error) $leaf was copied as collected, so RECmd may not be able to read it.")
+        }
+        else {
+            try {
+                $result.Notes = @(Expand-SparseFile -Source $Source -Index $index -Destination $Destination)
+                $result.Rehydrated = $true
+            }
+            catch {
+                $result.Notes = @("$leaf couldn't be rebuilt from $indexLeaf`: $($_.Exception.Message) It was copied as collected, so RECmd may not be able to read it.")
+            }
+        }
+    }
+    if (-not $result.Rehydrated) {
+        [System.IO.File]::Copy((Get-ExtendedLengthPath -Path $Source), $target)
+    }
     [System.IO.File]::SetAttributes($target, [System.IO.FileAttributes]::Normal)
+    return $result
+}
+
+function Get-IdentityFileSha256 {
+    # The SHA-256 of a file, read through the prefixed path where it needs one.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $stream = $null
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::Open((Get-ExtendedLengthPath -Path $Path), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        $sha.Dispose()
+    }
 }
 
 function New-HostIdentityRecord {
@@ -1586,11 +1652,13 @@ function Get-HostIdentity {
         foreach ($name in $script:IdentityHiveNames) {
             $source = $found.Hives[$name]
             $entry = [ordered]@{
-                Path              = Get-RelativeIdentityPath -Root $root -Path $source
-                Sha256            = $null
-                TransactionLogs   = @($found.Logs[$name] | ForEach-Object { [System.IO.Path]::GetFileName($_) })
-                Read              = $false
-                NoTransactionLogs = $false
+                Path                      = Get-RelativeIdentityPath -Root $root -Path $source
+                Sha256                    = $null
+                TransactionLogs           = @($found.Logs[$name] | ForEach-Object { [System.IO.Path]::GetFileName($_) })
+                Read                      = $false
+                NoTransactionLogs         = $false
+                Rehydrated                = $false
+                RehydratedTransactionLogs = @()
             }
             $identity.Source.Hives[$name] = $entry
             if ($null -eq $source) {
@@ -1603,15 +1671,36 @@ function Get-HostIdentity {
             # A copy keeps its source's ReadOnly attribute, which every file
             # on a mounted image has, and Windows won't delete a read-only
             # file, so it's cleared on each copy for the work folder to come
-            # down. Only the copies are touched, never the evidence.
+            # down. A hive or log stored sparse is rebuilt from its own index
+            # on the way, since a log can be sparse when its hive isn't. Only
+            # the copies are touched, never the evidence.
             $hiveDir = New-Item -ItemType Directory -Path (Join-Path -Path $hivesDir -ChildPath $name) -Force
             $copy = Join-Path -Path $hiveDir.FullName -ChildPath $name
-            Copy-IdentityFile -Source $source -Destination $copy
+            $copied = Copy-IdentityFile -Source $source -Destination $copy
+            $entry.Rehydrated = $copied.Rehydrated
+            foreach ($n in $copied.Notes) {
+                $notes.Add($n)
+            }
+            if ($copied.Rehydrated) {
+                $notes.Add("$name was stored sparse, so it was rebuilt from its sparse index before RECmd read it.")
+            }
+            $rebuiltLogs = New-Object System.Collections.Generic.List[string]
             foreach ($log in $found.Logs[$name]) {
                 $logCopy = Join-Path -Path $hiveDir.FullName -ChildPath ($name + [System.IO.Path]::GetExtension($log).ToUpperInvariant())
-                Copy-IdentityFile -Source $log -Destination $logCopy
+                $copiedLog = Copy-IdentityFile -Source $log -Destination $logCopy
+                foreach ($n in $copiedLog.Notes) {
+                    $notes.Add($n)
+                }
+                if ($copiedLog.Rehydrated) {
+                    $logLeaf = [System.IO.Path]::GetFileName($log)
+                    $rebuiltLogs.Add($logLeaf)
+                    $notes.Add("$logLeaf was stored sparse, so it was rebuilt from its sparse index before RECmd replayed it.")
+                }
             }
-            $entry.Sha256 = (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash
+            $entry.RehydratedTransactionLogs = $rebuiltLogs.ToArray()
+            # The hash is of the file as collected, so it matches the
+            # evidence whether or not the copy was rebuilt.
+            $entry.Sha256 = Get-IdentityFileSha256 -Path $source
 
             try {
                 $run = Invoke-RECmdHive -RECmdPath $recmd -HivePath $copy -Name $name -OutputDirectory $outDir
@@ -1764,7 +1853,7 @@ function Read-HostIdentity {
     if ($null -ne $parsed) {
         $versionProp = $parsed.PSObject.Properties['SchemaVersion']
     }
-    if ($null -eq $versionProp -or [string]$versionProp.Value -ne [string]$script:HostIdentitySchemaVersion) {
+    if ($null -eq $versionProp -or @($script:ReadableHostIdentitySchemaVersions | ForEach-Object { [string]$_ }) -notcontains [string]$versionProp.Value) {
         $result.Error = "Its identity file has a schema version this tool doesn't read."
         return $result
     }
