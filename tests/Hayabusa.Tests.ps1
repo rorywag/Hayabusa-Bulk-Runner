@@ -146,6 +146,43 @@ Describe 'Native capture' {
     }
 }
 
+Describe 'The line callback' {
+    BeforeAll {
+        Mock Assert-HayabusaHost { }
+        $script:cbIn = New-FakeHost -InputRoot (Join-TestPath $TestDrive 'cb') -Name 'HOST01' -Behavior "EXIT=3`nCSV=r.csv`nSTDERR=[ERROR] rules failed" -Files @{ 'r.csv' = @($TimelineHeader) }
+        $script:cbOut = New-TestDirectory (Join-TestPath $TestDrive 'cbo')
+        function script:Get-LogOutput([string]$Path) {
+            # The lines between the output markers of a Hayabusa log.
+            $all = @(Get-Content -LiteralPath $Path)
+            $from = [array]::IndexOf($all, '--- output ---')
+            $to = [array]::IndexOf($all, '--- end ---')
+            return , @($all[($from + 1)..($to - 1)])
+        }
+    }
+
+    It 'is ignored when it throws, and the log still gets every line and the exit code comes back' {
+        $seen = New-Object System.Collections.Generic.List[string]
+        $okLog = Join-TestPath $cbOut 'ok.log'
+        $okExit = Invoke-HayabusaProcess -HayabusaPath $hb -Argument @('dfir-timeline', '-d', $cbIn, '-o', (Join-TestPath $cbOut 'ok.csv')) -LogPath $okLog -OnLine { param($l) $seen.Add($l) }
+        $okExit | Should -Be 3
+        $seen.Count | Should -BeGreaterThan 1
+
+        $ErrorActionPreference = 'Stop'
+        $badLog = Join-TestPath $cbOut 'bad.log'
+        $calls = @{ Count = 0 }
+        $verbose = @(Invoke-HayabusaProcess -HayabusaPath $hb -Argument @('dfir-timeline', '-d', $cbIn, '-o', (Join-TestPath $cbOut 'bad.csv')) -LogPath $badLog -OnLine { param($l) $calls.Count++; throw "callback broke on $l" } -Verbose 4>&1)
+        $exit = @($verbose | Where-Object { $_ -is [int] })
+        $notes = @($verbose | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] -and $_.Message -like 'Progress for Hayabusa output failed*' })
+
+        $exit | Should -Be @(3)
+        $calls.Count | Should -Be $seen.Count -Because 'every line is still offered to the callback'
+        $notes.Count | Should -Be 1 -Because 'the failure is noted once'
+        (Get-LogOutput $badLog) | Should -Be (Get-LogOutput $okLog)
+        (Get-LogOutput $badLog) | Should -Contain '[stderr] [ERROR] rules failed'
+        @(Get-Content -LiteralPath $badLog) | Should -Contain 'Exit code: 3'
+    }
+}
+
 Describe 'Error from the log' {
     BeforeAll {
         function script:New-StderrLog([string]$Name, [string[]]$Stderr) {

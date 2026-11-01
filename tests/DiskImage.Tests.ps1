@@ -62,12 +62,12 @@ Describe 'diskpart script' {
         Get-ThrownMessage { Get-DifferencingChildScript -ParentPath 'D:\a"b.vhdx' -ChildPath 'D:\c.vhdx' } | Should -BeLike '*double quote*'
     }
     It 'calls diskpart by full path under SystemRoot' {
-        $saved = $env:SystemRoot
+        $saved = [System.Environment]::GetEnvironmentVariable('SystemRoot')
         try {
             $env:SystemRoot = 'C:\Windows'
             Get-DiskpartPath | Should -Be ([System.IO.Path]::Combine('C:\Windows', 'System32', 'diskpart.exe'))
         }
-        finally { $env:SystemRoot = $saved }
+        finally { Restore-TestEnvironmentVariable -Name 'SystemRoot' -Value $saved }
     }
 }
 
@@ -279,5 +279,37 @@ Describe 'Differencing child removal guard' {
         Get-ThrownMessage { Remove-DifferencingChild -Path $parentRaw -DiffRoot $diff } | Should -BeLike '*not a differencing child directly under*'
         $x = Write-TestText -Path (Join-TestPath $diff 'notes.txt') -Line @('x')
         Get-ThrownMessage { Remove-DifferencingChild -Path $x -DiffRoot $diff } | Should -BeLike '*not a differencing child*'
+    }
+}
+
+Describe 'Streamed image hash' {
+    It 'matches Get-FileHash for <Name>' -ForEach @(
+        @{ Name = 'an empty file'; Size = 0 }
+        @{ Name = 'a file smaller than a block'; Size = 1000 }
+        @{ Name = 'a file of exactly one block'; Size = 4MB }
+        @{ Name = 'a file larger than a block'; Size = (4MB + 12345) }
+    ) {
+        $p = Join-TestPath $TestDrive "hash-$Size.vhdx"
+        [System.IO.File]::WriteAllBytes($p, (New-TestByteArray -Count $Size -Random))
+        Get-ImageSha256 -Path $p | Should -BeExactly (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
+    }
+
+    It 'reports the bytes done to the current step, up to the whole image' {
+        Mock Update-ConsoleStep { }
+        $p = Join-TestPath $TestDrive 'hash-progress.vhdx'
+        [System.IO.File]::WriteAllBytes($p, (New-TestByteArray -Count (9MB + 7) -Random))
+        Get-ImageSha256 -Path $p | Out-Null
+        Should -Invoke Update-ConsoleStep -Times 3 -Exactly
+        Should -Invoke Update-ConsoleStep -Times 1 -Exactly -ParameterFilter { $Done -eq (9MB + 7) -and $Total -eq (9MB + 7) }
+    }
+
+    It 'leaves the image as it was' {
+        $p = Join-TestPath $TestDrive 'hash-untouched.vhdx'
+        [System.IO.File]::WriteAllBytes($p, (New-TestByteArray -Count 5000 -Random))
+        $before = (Get-Item -LiteralPath $p).LastWriteTimeUtc
+        $hash = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
+        Get-ImageSha256 -Path $p | Out-Null
+        (Get-Item -LiteralPath $p).LastWriteTimeUtc | Should -Be $before
+        (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash | Should -BeExactly $hash
     }
 }

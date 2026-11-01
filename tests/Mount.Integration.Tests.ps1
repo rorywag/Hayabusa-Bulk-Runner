@@ -19,6 +19,7 @@ BeforeDiscovery {
 Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
     BeforeAll {
         . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
+        Enter-TestPlainConsole
         $script:in = New-TestDirectory (Join-TestPath $TestDrive 'in')
         $script:parent = Join-TestPath $in 'HOST01.vhdx'
 
@@ -45,6 +46,7 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
     }
 
     AfterAll {
+        Exit-TestPlainConsole
         foreach ($p in @($parent) + @(Get-ChildItem -Path (Join-TestPath $TestDrive '*' '_diff') -Filter '*.vhdx' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })) {
             if ($p -and (Test-Path -LiteralPath $p) -and (Get-DiskImage -ImagePath $p -ErrorAction SilentlyContinue).Attached) {
                 Dismount-DiskImage -ImagePath $p | Out-Null
@@ -88,7 +90,7 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
     It 'runs the whole tool against it and leaves the parent unchanged' {
         $hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
         $out = Join-TestPath $TestDrive 'out-main'
-        $r = & $MainScript -InputRoot $in -OutputRoot $out -HayabusaPath $hb -WarningAction SilentlyContinue
+        $r = & $MainScript -PassThru -InputRoot $in -OutputRoot $out -HayabusaPath $hb -WarningAction SilentlyContinue
         $row = (Get-RunManifest -Path $r.ManifestPath)['HOST01']
         $row.Status | Should -Be 'Completed'
         $row.Host | Should -Be 'WS01'

@@ -218,6 +218,11 @@ function Invoke-HayabusaProcess {
         The log starts with the time, the binary and the exact argument
         list, one per line, for the record. Hayabusa's stdout and stderr
         follow as they arrive, then the exit code. Returns the exit code.
+        OnLine, if given, is also called with each line, for showing
+        progress. Hayabusa's output comes from the evidence, so whatever
+        OnLine shows must be sanitised first. A failure in OnLine is noted
+        once in Verbose and otherwise ignored, so it never costs a line of
+        the log.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([int])]
@@ -229,7 +234,9 @@ function Invoke-HayabusaProcess {
         [string[]]$Argument,
 
         [Parameter(Mandatory)]
-        [string]$LogPath
+        [string]$LogPath,
+
+        [scriptblock]$OnLine
     )
 
     Assert-HayabusaHost
@@ -250,9 +257,26 @@ function Invoke-HayabusaProcess {
         $writer.WriteLine('--- output ---')
         $writer.Flush()
 
+        # Held under another name, since the block below runs inside
+        # Invoke-NativeCapture, where $OnLine is that block itself.
+        # The callback only shows progress, so when it fails that's noted
+        # once in Verbose and the capture, the log and the host carry on.
+        $lineCallback = $OnLine
+        $callbackState = @{ Failed = $false }
         $exit = Invoke-NativeCapture -FilePath $HayabusaPath -Argument $Argument -OnLine {
             param($line)
             $writer.WriteLine($line)
+            if ($null -ne $lineCallback) {
+                try {
+                    & $lineCallback $line
+                }
+                catch {
+                    if (-not $callbackState.Failed) {
+                        $callbackState.Failed = $true
+                        Write-Verbose "Progress for Hayabusa output failed and is ignored: $(ConvertTo-ConsoleText -Text $_.Exception.Message)"
+                    }
+                }
+            }
         }
 
         $writer.WriteLine('--- end ---')

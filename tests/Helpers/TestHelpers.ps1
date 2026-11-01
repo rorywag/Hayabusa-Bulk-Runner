@@ -13,15 +13,21 @@ $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHay
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
-$script:LibOrder = @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
+$script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
 
+# Console lines come out in colour only on a terminal. With colour off each
+# line is one information record wherever the tests run, so the assertions
+# on them hold. tests\Console.Tests.ps1 covers colour itself. Nothing here
+# touches the environment, so the analyst's shell is left as it was.
+Initialize-ConsoleOutput -Color $false
+
 # The fake Hayabusa reports the tested version in its help banner, so the
 # version notice is tested against whatever lib/Hayabusa.ps1 says. It runs
-# as its own process, so the version reaches it through the environment.
-$env:FAKE_HAYABUSA_VERSION = $script:TestedHayabusaVersion
+# as its own process, so New-FakeHayabusa writes the version into its
+# launcher.
 $script:FakeVersionLine = "Hayabusa v$($script:TestedHayabusaVersion) - Autumn Release"
 # A version that is never the tested one, the next minor release, for the
 # tests of what happens when the versions differ.
@@ -192,6 +198,8 @@ function New-FakeHayabusa {
         $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa.cmd'
         Write-TestText -Path $launcher -Line @(
             '@echo off'
+            'setlocal'
+            "set `"FAKE_HAYABUSA_VERSION=$script:TestedHayabusaVersion`""
             "`"$hostExe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script:FakeHayabusaScript`" %*"
             'exit /b %ERRORLEVEL%'
         ) | Out-Null
@@ -200,6 +208,8 @@ function New-FakeHayabusa {
         $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa'
         Write-TestText -Path $launcher -Line @(
             '#!/bin/sh'
+            "FAKE_HAYABUSA_VERSION='$script:TestedHayabusaVersion'"
+            'export FAKE_HAYABUSA_VERSION'
             "exec `"$hostExe`" -NoProfile -NonInteractive -File `"$script:FakeHayabusaScript`" `"`$@`""
         ) | Out-Null
         & chmod +x $launcher
@@ -221,6 +231,63 @@ function New-FakeHost {
         Write-TestText -Path (Join-Path -Path $d -ChildPath $k) -Line ([string[]]$Files[$k]) | Out-Null
     }
     return $d
+}
+
+function Restore-TestEnvironmentVariable {
+    <#
+    Puts an environment variable back to a value saved earlier with
+    [System.Environment]::GetEnvironmentVariable, removing it when that was
+    $null. Passing $null to SetEnvironmentVariable from PowerShell turns it
+    into an empty string, and some .NET versions keep the variable set and
+    empty, so it's removed here through the Env: drive instead. Value is
+    left untyped on purpose, since a [string] parameter would turn $null
+    into an empty string too.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidatePattern('^[A-Za-z_][A-Za-z0-9_]*$')][string]$Name,
+        [AllowNull()]$Value
+    )
+    $path = "Env:\$Name"
+    if ($null -eq $Value) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path
+        }
+    }
+    else {
+        Set-Item -LiteralPath $path -Value ([string]$Value)
+    }
+}
+
+function Enter-TestPlainConsole {
+    <#
+    Sets NO_COLOR and COLUMNS for runs of the entry script, which works out
+    colour and width for itself, so its lines are one information record
+    each and lay out at 120 columns on any machine and terminal.
+    Exit-TestPlainConsole puts back whatever was there before. Call the
+    pair from BeforeAll and AfterAll.
+    #>
+    $script:SavedNoColor = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
+    $script:SavedColumns = [System.Environment]::GetEnvironmentVariable('COLUMNS')
+    $env:NO_COLOR = '1'
+    $env:COLUMNS = '120'
+}
+
+function Exit-TestPlainConsole {
+    Restore-TestEnvironmentVariable -Name 'NO_COLOR' -Value $script:SavedNoColor
+    Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $script:SavedColumns
+}
+
+function Get-TestEnvironment {
+    # Every environment variable as sorted NAME=value lines, for comparing.
+    $lines = foreach ($e in [System.Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        '{0}={1}' -f $e.Key, $e.Value
+    }
+    return , [string[]]@($lines | Sort-Object -CaseSensitive)
+}
+
+function Get-TestToolVersion {
+    # $ToolVersion as the entry script sets it, so a release needs no test change.
+    return [regex]::Match([System.IO.File]::ReadAllText($script:MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
 }
 
 function Get-ThrownMessage {

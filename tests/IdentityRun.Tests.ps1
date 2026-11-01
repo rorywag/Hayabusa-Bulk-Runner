@@ -9,6 +9,7 @@ BeforeDiscovery {
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
     . (Join-Path $PSScriptRoot 'Helpers/IdentityHelpers.ps1')
+    Enter-TestPlainConsole
     $script:hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
     $script:resolved = Get-TestRunSetting -HayabusaPath $hb
     $script:csv = @($TimelineHeader) + @(New-TimelineRow 'WS01' 'crit' 'RuleA')
@@ -42,6 +43,10 @@ BeforeAll {
     }
 }
 
+AfterAll {
+    Exit-TestPlainConsole
+}
+
 Describe 'A normal batch without RECmdPath' {
     BeforeAll {
         Mock Assert-HayabusaHost { }
@@ -59,7 +64,9 @@ Describe 'A normal batch without RECmdPath' {
         (Get-RunManifest -Path $R0.Manifest)['H1'].Host | Should -BeExactly 'WS01'
         Test-Path -LiteralPath (Get-HostIdentityPath -OutputRoot $R0.Out -Collection 'H1') | Should -BeFalse
         Should -Invoke Invoke-RECmd -Times 0 -Exactly -Scope Describe
-        $info0 | Should -Contain '[1/1] H1 ... Completed, 1 detection'
+        $info0 | Should -Contain '[1/1] H1  folder'
+        @($info0 | Where-Object { $_ -like '*Read identity*' }).Count | Should -Be 0
+        @($info0 | Where-Object { $_ -match '^ {6}Completed in \d+s$' }).Count | Should -Be 1
     }
 }
 
@@ -113,9 +120,14 @@ Describe 'A normal batch with RECmdPath' {
         @(Get-ChildItem -LiteralPath (Join-TestPath $R1.Out '_work') -Force -ErrorAction SilentlyContinue).Count | Should -Be 0
     }
 
-    It 'ends each progress line with the identity status' {
-        $info1 | Should -Contain '[1/3] H1 ... Completed, 1 detection, identity Complete'
-        $info1 | Should -Contain '[2/3] H2 ... Completed, 1 detection, identity NoRegistryHives'
+    It 'shows reading identity as a step of its own, with its status and the registry computer name' {
+        @($info1 | Where-Object { $_ -match '^ {6}Read identity +Complete, FAKE-HOST-01 +\d+s$' }).Count | Should -Be 2
+        @($info1 | Where-Object { $_ -match '^ {6}Read identity +NoRegistryHives +\d+s$' }).Count | Should -Be 1
+        @($info1 | Where-Object { $_ -match '^ {6}Extract +done +\d+s$' }).Count | Should -Be 1
+        @($info1 | Where-Object { $_ -match '^ {6}Teardown +done +\d+s$' }).Count | Should -Be 1
+        $rows = @(Get-ConsoleSummaryRow)
+        @($rows | ForEach-Object { $_.Identity }) | Should -Be @('Complete', 'NoRegistryHives', 'Complete')
+        $rows[0].Computer | Should -BeExactly 'FAKE-HOST-01'
     }
 
     It 'keeps the triage result when reading identity fails' {
@@ -170,14 +182,18 @@ Describe 'The identity-only batch' {
         Get-IdentityStatus $RI.Out 'H2' | Should -BeExactly 'NoRegistryHives'
         Get-IdentityStatus $RI.Out 'H4' | Should -BeExactly 'Complete'
         @(Get-ChildItem -LiteralPath (Join-TestPath $RI.Out '_work') -Force -ErrorAction SilentlyContinue).Count | Should -Be 0
-        $infoI | Should -Contain '[1/4] H1 ... identity Complete, FAKE-HOST-01'
+        $infoI | Should -Contain '[1/4] H1  folder'
+        @($infoI | Where-Object { $_ -match '^ {6}Read identity +Complete, FAKE-HOST-01 +\d+s$' }).Count | Should -Be 2
+        @($infoI | Where-Object { $_ -match '^ {6}Complete in \d+s$' }).Count | Should -Be 2
+        @($infoI | Where-Object { $_ -match '^ {6}NoRegistryHives in \d+s$' }).Count | Should -Be 1
     }
 
     It 'saves a ZIP it can''t extract as Failed with the guidance, without warning twice' {
         $id = (Read-HostIdentity -OutputRoot $RI.Out -Collection 'H3').Identity
         $id.Status | Should -BeExactly 'Failed'
         @($id.Notes)[0] | Should -BeLike "H3.zip can't be extracted by this tool*"
-        $infoI | Should -Contain '[3/4] H3 ... identity Failed: ZIP not extracted, see the warning at the start'
+        $infoI | Should -Contain '[3/4] H3  ZIP'
+        $infoI | Should -Contain '      Failed, ZIP not extracted, see Before the run'
         @($warnI | Where-Object { $_ -like '*H3*' }).Count | Should -Be 0
     }
 
@@ -193,7 +209,7 @@ Describe 'The identity-only batch' {
         $again = Invoke-IdentityBatch -Collections $colsI -OutputRoot $RI.Out -RECmdPath $fakeRECmd -Limits $limits -InformationVariable iv -InformationAction SilentlyContinue -WarningAction SilentlyContinue
         $again.Skipped | Should -Be 3
         $again.Processed | Should -Be 1
-        @($iv | ForEach-Object { "$_" }) | Should -Contain '[2/4] H2 ... skipped, identity already NoRegistryHives'
+        @($iv | ForEach-Object { "$_" }) | Should -Contain '[2/4] H2  skipped, identity already NoRegistryHives'
         $forced = Invoke-IdentityBatch -Collections $colsI -OutputRoot $RI.Out -RECmdPath $fakeRECmd -Limits $limits -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
         $forced.Processed | Should -Be 4
     }
@@ -236,7 +252,7 @@ Describe 'The entry script and host identity' {
 
     It 'reads no identity and writes no identity dashboard when RECmdPath is not set' {
         $o = Join-TestPath $TestDrive 'main-noid'
-        $r = & $MainScript -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath $cfgWithout -WarningAction SilentlyContinue -InformationAction SilentlyContinue
+        $r = & $MainScript -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath $cfgWithout -WarningAction SilentlyContinue -InformationAction SilentlyContinue -PassThru
         $r.Identity | Should -BeNullOrEmpty
         Test-Path -LiteralPath (Join-TestPath $o 'identity_dashboard.html') | Should -BeFalse
         @(Get-ChildItem -LiteralPath $o -Recurse -Filter '*_identity.json').Count | Should -Be 0
@@ -246,16 +262,17 @@ Describe 'The entry script and host identity' {
     It 'writes the identity dashboard beside the triage dashboard when RECmdPath is set, leaving run-meta as it was' {
         $o = Join-TestPath $TestDrive 'main-id'
         $iv = $null
-        $r = & $MainScript -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath $cfgWith -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $r = & $MainScript -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath $cfgWith -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue -PassThru
         $info = @($iv | ForEach-Object { "$_" })
         $r.Identity.Error | Should -BeNullOrEmpty
         $r.Identity.Dashboard | Should -Be (Join-TestPath $o 'identity_dashboard.html')
         Test-Path -LiteralPath (Join-TestPath $o 'triage_dashboard.html') | Should -BeTrue
-        $info[-1] | Should -BeExactly 'Open identity_dashboard.html there for host identity.'
-        @($info | Where-Object { $_ -like 'Host identity will also be read*' }).Count | Should -Be 1
+        $info[0] | Should -BeExactly "Hayabusa-Bulk-Runner $(Get-TestToolVersion), running Hayabusa and reading host identity"
+        $info | Should -Contain "Identity dashboard   $($r.Identity.Dashboard)"
+        @($info | Where-Object { $_ -like 'RECmd *' }).Count | Should -Be 1
         $raw = Get-Content -LiteralPath $r.RunMetaPath -Raw
-        ($raw | ConvertFrom-Json).SchemaVersion | Should -Be 7
-        $raw | Should -Not -Match 'identity|RECmd'
+        ($raw | ConvertFrom-Json).SchemaVersion | Should -Be 8
+        ($raw -replace '"RunLog":\s*"[^"]*"', '') | Should -Not -Match 'identity|RECmd'
         $html = [System.IO.File]::ReadAllText($r.Identity.Dashboard)
         $html | Should -Match '<td>HOST01</td>'
         $html | Should -Match '<td>HOST02</td>'
@@ -285,17 +302,30 @@ Describe 'The entry script and host identity' {
     It 'reads identity only, skipping Hayabusa and the triage rollup, and still writes the identity dashboard' {
         $o = Join-TestPath $TestDrive 'main-idonly'
         $iv = $null
-        $r = & $MainScript -InputRoot $in -OutputRoot $o -ConfigPath $cfgWith -IdentityOnly -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $r = & $MainScript -InputRoot $in -OutputRoot $o -ConfigPath $cfgWith -IdentityOnly -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue -PassThru
         $info = @($iv | ForEach-Object { "$_" })
         $r.Summary.Processed | Should -Be 2
         $r.Identity.Dashboard | Should -Be (Join-TestPath $o 'identity_dashboard.html')
         Test-Path -LiteralPath $r.Identity.Dashboard | Should -BeTrue
-        foreach ($f in 'run_manifest.csv', 'triage_dashboard.html', 'triage_hosts.csv', 'triage_rules.csv', '_runs') {
+        foreach ($f in 'run_manifest.csv', 'triage_dashboard.html', 'triage_hosts.csv', 'triage_rules.csv') {
             Test-Path -LiteralPath (Join-TestPath $o $f) | Should -BeFalse -Because "$f is from a Hayabusa run"
         }
+        # _runs holds this run's log, and no run-meta.
+        @(Get-ChildItem -LiteralPath (Join-TestPath $o '_runs') -Filter 'run_meta*').Count | Should -Be 0
+        $r.RunLogPath | Should -Match ('_runs[\\/]run_\d{8}T\d{6}Z_[0-9a-f-]{36}\.log$')
+        Test-Path -LiteralPath $r.RunLogPath | Should -BeTrue
         @(Get-ChildItem -LiteralPath $o -Recurse -Filter '*_timeline.csv').Count | Should -Be 0
         Get-IdentityStatus $o 'HOST01' | Should -BeExactly $expected
-        $info[0] | Should -BeExactly "Reading host identity only, with RECmd at $fakeRECmd. Hayabusa is not run."
-        $info[-1] | Should -BeExactly "Output is in $o. Open identity_dashboard.html there for host identity."
+        $info[0] | Should -BeExactly "Hayabusa-Bulk-Runner $(Get-TestToolVersion), reading host identity only, Hayabusa is not run"
+        @($info | Where-Object { $_ -like 'Hayabusa *' }).Count | Should -Be 0 -Because 'there is no Hayabusa line in the header'
+        $info | Should -Contain "Identity dashboard   $($r.Identity.Dashboard)"
+        $info[-1] | Should -BeExactly "Run log              $($r.RunLogPath)"
+    }
+
+    It 'returns nothing without -PassThru' {
+        $o = Join-TestPath $TestDrive 'main-idonly-quiet'
+        $r = @(& $MainScript -InputRoot $in -OutputRoot $o -ConfigPath $cfgWith -IdentityOnly -WarningAction SilentlyContinue -InformationAction SilentlyContinue)
+        $r.Count | Should -Be 0
+        Test-Path -LiteralPath (Join-TestPath $o 'identity_dashboard.html') | Should -BeTrue
     }
 }

@@ -59,16 +59,46 @@ Keep the `lib` folder beside the three scripts, `Invoke-BulkHayabusa.ps1`, `Invo
 .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe
 ```
 
-It prints one line per host as it goes, then a short summary and where to look:
+It prints a header, then a block for each host as it goes with a line for each step, then a summary and where to look:
 
 ```
-[1/4] DC01 ... Completed, 12 detections
-[2/4] FS02 ... Completed, 6 detections
+Hayabusa-Bulk-Runner 0.10.1, running Hayabusa
+Input     D:\Cases\Case01\KAPE, 4 collections, 3 folders, 1 VHDX
+Output    D:\Cases\Case01\Output
+Hayabusa  4.3.1, D:\Tools\hayabusa\hayabusa.exe
+Rules     newest rule file 2026-10-30T09:12:44Z, 4321 rule files
+
+Before the run
+  1 disk image is hashed before mounting and again after teardown, so it's read in full twice.
+
+[1/4] DC01  VHDX, 38.2 GB
+      Hash before mount     done                         5m12s
+      Mount                 done                            6s
+      Hayabusa              12 detections                9m41s
+      Teardown              done                            4s
+      Hash after teardown   unchanged                    5m09s
+      Completed in 20m12s
+[2/4] FS02  folder
+      Hayabusa              6 detections                 3m02s
+      Completed in 3m02s
+[3/4] WS03  folder
+      Hayabusa              failed, exit code 2, no CSV written   41s
 WARNING: [3/4] WS03 ... Failed: Hayabusa exited with code 2. See D:\Cases\Case01\Output\WS03\WS03_hayabusa.log. No CSV was written.
-[4/4] WS04 ... skipped, already Completed
-Done: 3 processed, 2 completed, 0 completed with errors, 1 failed, 1 skipped.
-Output is in D:\Cases\Case01\Output. Open triage_dashboard.html there to start triage.
+      Failed in 41s
+[4/4] WS04  skipped, already Completed
+
+Summary
+  Collection  Status     Detections    Time
+  DC01        Completed          12  20m12s
+  FS02        Completed           6   3m02s
+  WS03        Failed                    41s
+  WS04        Skipped
+3 processed, 2 completed, 0 completed with errors, 1 failed, 1 skipped, in 24m01s.
+Triage dashboard     D:\Cases\Case01\Output\triage_dashboard.html
+Run log              D:\Cases\Case01\Output\_runs\run_20261101T091502Z_3f2c8a1e-5b7d-4c90-9e21-6a4f0d8b7c13.log
 ```
+
+Progress bars show how far a long hash or a Hayabusa run has got, and the same lines go to a log in `_runs`. See [Reading the console](docs/USAGE.md#reading-the-console).
 
 In a fresh PowerShell window the script may be blocked by the execution policy. This allows it for that window only, and changes nothing on the machine:
 

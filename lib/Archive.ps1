@@ -907,7 +907,7 @@ function Expand-ZipArchiveSafe {
         $margin = [long][math]::Max($declared * $script:FreeSpaceMarginFraction, $script:FreeSpaceMarginMinBytes)
         $needed = $declared + $margin
         if ($null -eq $free) {
-            Write-Warning "Could not read free space for $parent. Extracting $Path without a free space check."
+            Write-RunWarning -Message "Could not read free space for $parent. Extracting $Path without a free space check."
         }
         elseif ($free -lt $needed) {
             throw ("Not enough free space to extract {0}: needs {1:N0} bytes including margin, {2:N0} bytes free." -f $Path, $needed, $free)
@@ -982,7 +982,7 @@ function Expand-ZipArchiveSafe {
                 Remove-DirectoryTree -Path $Destination
             }
             catch {
-                Write-Warning "Could not remove the partial extract ${Destination}: $($_.Exception.Message). Teardown will try again."
+                Write-RunWarning -Message "Could not remove the partial extract ${Destination}: $($_.Exception.Message). Teardown will try again."
             }
         }
         # The discovery check should stop these first. If .NET still meets

@@ -4,6 +4,9 @@ $script:VolumeWaitSeconds = 10
 $script:DriveLetterWaitSeconds = 3
 $script:PollMilliseconds = 500
 
+# Each image hash reads this much at a time.
+$script:ImageHashBlockBytes = 4MB
+
 # KAPE VHD and VHDX containers are dirty on creation, so a read-only mount
 # surfaces no disk and no volume. Each image is mounted through a
 # differencing child instead: the child is mounted read-write, the journal
@@ -347,7 +350,16 @@ function Resolve-ImageVolume {
 }
 
 function Get-ImageSha256 {
-    # The SHA-256 of an evidence image, read in full.
+    <#
+    .SYNOPSIS
+        The SHA-256 of an evidence image, read in full.
+    .DESCRIPTION
+        Read in 4 MB blocks from a stream opened read-only, sharing only
+        reads, so nothing can write to the image while it's hashed, and
+        marked for sequential reading. The bytes done are reported to the
+        current console step as it goes. The hash is the same as
+        Get-FileHash gives, uppercase hex.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -355,25 +367,27 @@ function Get-ImageSha256 {
         [string]$Path
     )
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
-}
-
-function Format-ImageSize {
-    # "12.3 GB" or "512 MB", for the console line that warns a hash will
-    # take a while.
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    $bytes = [double](Get-Item -LiteralPath $Path -Force).Length
-    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
-    if ($bytes -ge 1GB) {
-        return ('{0} GB' -f ($bytes / 1GB).ToString('0.0', $invariant))
+    $stream = $null
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = New-Object System.IO.FileStream((Get-ExtendedLengthPath -Path $Path), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read, 4096, [System.IO.FileOptions]::SequentialScan)
+        $total = $stream.Length
+        $buffer = New-Object byte[] $script:ImageHashBlockBytes
+        $done = 0L
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha.TransformBlock($buffer, 0, $read, $null, 0)
+            $done += $read
+            Update-ConsoleStep -Done $done -Total $total
+        }
+        [void]$sha.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+        return ([System.BitConverter]::ToString($sha.Hash)).Replace('-', '')
     }
-    return ('{0} MB' -f [math]::Ceiling($bytes / 1MB).ToString($invariant))
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        $sha.Dispose()
+    }
 }
 
 function Mount-CollectionImage {
@@ -449,11 +463,18 @@ function Mount-CollectionImage {
 
     # Hashed just before the child is created, and again by the teardown
     # step once the child is dismounted and deleted.
-    $leaf = Split-Path -Path $ImagePath -Leaf
-    Write-Information "${Collection}: hashing $leaf ($(Format-ImageSize -Path $ImagePath)) with SHA-256 before mounting it. This reads the whole image, so a large one takes a while."
+    Start-ConsoleStep -Name 'Hash before mount'
+    try {
+        $before = Get-ImageSha256 -Path $ImagePath
+    }
+    catch {
+        Complete-ConsoleStep -Failed -Reason $_.Exception.Message
+        throw
+    }
+    Complete-ConsoleStep -Result 'done'
     $record = [pscustomobject]@{
         ImagePath = $ImagePath
-        Before    = (Get-ImageSha256 -Path $ImagePath)
+        Before    = $before
         After     = $null
         Match     = $null
     }
@@ -462,48 +483,58 @@ function Mount-CollectionImage {
     }
     Add-TeardownStep -Teardown $Teardown -Kind 'CheckImageHash' -Target $ImagePath -Record $record
 
-    New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
-    Add-TeardownStep -Teardown $Teardown -Kind 'RemoveDiffChild' -Target $child -Root $DiffRoot
+    Start-ConsoleStep -Name 'Mount'
+    try {
+        New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
+        Add-TeardownStep -Teardown $Teardown -Kind 'RemoveDiffChild' -Target $child -Root $DiffRoot
 
-    Mount-ImageFile -ImagePath $child
-    Add-TeardownStep -Teardown $Teardown -Kind 'Dismount' -Target $child
+        Mount-ImageFile -ImagePath $child
+        Add-TeardownStep -Teardown $Teardown -Kind 'Dismount' -Target $child
 
-    $volume = Resolve-ImageVolume -ImagePath $child
+        $volume = Resolve-ImageVolume -ImagePath $child
 
-    if ($null -ne $volume.DriveLetter) {
-        return [pscustomobject]@{
-            Path        = "$($volume.DriveLetter):\"
-            DriveLetter = $volume.DriveLetter
-            MountPath   = $null
-            ChildPath   = $child
-            ImageHash   = $record
+        if ($null -ne $volume.DriveLetter) {
+            $mounted = [pscustomobject]@{
+                Path        = "$($volume.DriveLetter):\"
+                DriveLetter = $volume.DriveLetter
+                MountPath   = $null
+                ChildPath   = $child
+                ImageHash   = $record
+            }
+        }
+        else {
+            $mountDir = Join-Path -Path $MountRoot -ChildPath $Collection
+            if (Test-Path -LiteralPath $mountDir) {
+                $item = Get-Item -LiteralPath $mountDir -Force
+                if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    throw "$mountDir is still a mount point from an earlier run. Remove it with 'mountvol $mountDir /D' and rerun."
+                }
+                if (@(Get-ChildItem -LiteralPath $mountDir -Force).Count -gt 0) {
+                    throw "$mountDir is not empty and cannot be used as a mount folder."
+                }
+            }
+            else {
+                New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
+            }
+            Add-TeardownStep -Teardown $Teardown -Kind 'RemoveMountFolder' -Target $mountDir -Root $MountRoot
+
+            $accessPath = $mountDir.TrimEnd('\') + '\'
+            Add-CollectionAccessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber -AccessPath $accessPath
+            Add-TeardownStep -Teardown $Teardown -Kind 'RemoveAccessPath' -Target $accessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber
+
+            $mounted = [pscustomobject]@{
+                Path        = $mountDir
+                DriveLetter = $null
+                MountPath   = $mountDir
+                ChildPath   = $child
+                ImageHash   = $record
+            }
         }
     }
-
-    $mountDir = Join-Path -Path $MountRoot -ChildPath $Collection
-    if (Test-Path -LiteralPath $mountDir) {
-        $item = Get-Item -LiteralPath $mountDir -Force
-        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-            throw "$mountDir is still a mount point from an earlier run. Remove it with 'mountvol $mountDir /D' and rerun."
-        }
-        if (@(Get-ChildItem -LiteralPath $mountDir -Force).Count -gt 0) {
-            throw "$mountDir is not empty and cannot be used as a mount folder."
-        }
+    catch {
+        Complete-ConsoleStep -Failed -Reason $_.Exception.Message
+        throw
     }
-    else {
-        New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
-    }
-    Add-TeardownStep -Teardown $Teardown -Kind 'RemoveMountFolder' -Target $mountDir -Root $MountRoot
-
-    $accessPath = $mountDir.TrimEnd('\') + '\'
-    Add-CollectionAccessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber -AccessPath $accessPath
-    Add-TeardownStep -Teardown $Teardown -Kind 'RemoveAccessPath' -Target $accessPath -DiskNumber $volume.DiskNumber -PartitionNumber $volume.PartitionNumber
-
-    return [pscustomobject]@{
-        Path        = $mountDir
-        DriveLetter = $null
-        MountPath   = $mountDir
-        ChildPath   = $child
-        ImageHash   = $record
-    }
+    Complete-ConsoleStep -Result 'done'
+    return $mounted
 }

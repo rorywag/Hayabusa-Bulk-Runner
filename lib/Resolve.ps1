@@ -145,15 +145,57 @@ function Invoke-CollectionCleanup {
     $errors = New-Object System.Collections.Generic.List[string]
     $mountStillActive = $false
 
+    # Console steps: "Teardown" for the steps before the image is hashed
+    # again, "Hash after teardown" for the hash, and "Remove extract" for
+    # an extract removed after it, as when a ZIP held the image. A step
+    # shows failed with the first error it hit, and done otherwise.
+    $phase = $null
+    $phaseErrors = 0
+    $phaseKept = 0
+    $hashed = $false
+    $closePhase = {
+        if ($null -ne $phase) {
+            if ($errors.Count -gt $phaseErrors) {
+                Complete-ConsoleStep -Failed -Reason $errors[$phaseErrors]
+            }
+            elseif ($phaseKept -gt 0) {
+                Complete-ConsoleStep -Result 'done, artifacts kept'
+            }
+            else {
+                Complete-ConsoleStep -Result 'done'
+            }
+        }
+    }
+
     foreach ($kind in $script:TeardownOrder) {
-        foreach ($step in @($Resolved.Teardown | Where-Object { $_.Kind -eq $kind -and -not $_.Done })) {
+        $pending = @($Resolved.Teardown | Where-Object { $_.Kind -eq $kind -and -not $_.Done })
+        if ($pending.Count -eq 0) {
+            continue
+        }
+        if ($kind -eq 'CheckImageHash') {
+            . $closePhase
+            $phase = $null
+        }
+        elseif ($null -eq $phase) {
+            $phase = 'Teardown'
+            if ($hashed) {
+                $phase = 'Remove extract'
+            }
+            $phaseErrors = $errors.Count
+            $phaseKept = 0
+            Start-ConsoleStep -Name $phase
+        }
+        foreach ($step in $pending) {
             if ($script:KeptArtifactKinds -contains $kind -and $Resolved.KeepArtifacts) {
                 Write-Verbose "Keeping $($step.Target) (-KeepArtifacts)."
                 $step.Done = $true
+                $phaseKept++
                 continue
             }
             if ($kind -eq 'CheckImageHash' -and $mountStillActive) {
                 $errors.Add("Did not check the SHA-256 of $($step.Target) after the run, because the image may still be mounted.")
+                Start-ConsoleStep -Name 'Hash after teardown'
+                Complete-ConsoleStep -Failed -Reason 'not taken, the image may still be mounted'
                 continue
             }
             if ($script:NeedsDismountKinds -contains $kind -and $mountStillActive) {
@@ -161,6 +203,9 @@ function Invoke-CollectionCleanup {
                 continue
             }
 
+            if ($kind -eq 'CheckImageHash') {
+                Start-ConsoleStep -Name 'Hash after teardown'
+            }
             try {
                 switch ($kind) {
                     'RemoveAccessPath' {
@@ -176,7 +221,6 @@ function Invoke-CollectionCleanup {
                         Remove-DifferencingChild -Path $step.Target -DiffRoot $step.Root
                     }
                     'CheckImageHash' {
-                        Write-Information "$($Resolved.Collection): hashing $(Split-Path -Path $step.Target -Leaf) again to check it is unchanged."
                         $step.Record.After = Get-ImageSha256 -Path $step.Target
                         $step.Record.Match = ($step.Record.After -eq $step.Record.Before)
                     }
@@ -186,15 +230,30 @@ function Invoke-CollectionCleanup {
                 }
                 $step.Done = $true
                 Write-Verbose "Teardown: $kind $($step.Target)"
+                if ($kind -eq 'CheckImageHash') {
+                    if ($step.Record.Match) {
+                        Complete-ConsoleStep -Result 'unchanged'
+                    }
+                    else {
+                        Complete-ConsoleStep -Result 'changed'
+                    }
+                }
             }
             catch {
                 $errors.Add("$kind $($step.Target) failed: $($_.Exception.Message)")
                 if ($kind -eq 'RemoveAccessPath' -or $kind -eq 'Dismount') {
                     $mountStillActive = $true
                 }
+                if ($kind -eq 'CheckImageHash') {
+                    Complete-ConsoleStep -Failed -Reason $_.Exception.Message
+                }
             }
         }
+        if ($kind -eq 'CheckImageHash') {
+            $hashed = $true
+        }
     }
+    . $closePhase
 
     if ($errors.Count -gt 0) {
         throw ("Cleanup for collection {0} did not complete:`n  {1}" -f $Resolved.Collection, ($errors -join "`n  "))
@@ -333,7 +392,15 @@ function Resolve-CollectionInput {
                 }
 
                 Add-TeardownStep -Teardown $teardown -Kind 'RemoveExtract' -Target $extract -Root $workRoot
-                Expand-ZipArchiveSafe -Path $Collection.SourcePath -Destination $extract -MaxUncompressedBytes $MaxUncompressedBytes -MaxRatio $MaxRatio | Out-Null
+                Start-ConsoleStep -Name 'Extract'
+                try {
+                    Expand-ZipArchiveSafe -Path $Collection.SourcePath -Destination $extract -MaxUncompressedBytes $MaxUncompressedBytes -MaxRatio $MaxRatio | Out-Null
+                }
+                catch {
+                    Complete-ConsoleStep -Failed -Reason $_.Exception.Message
+                    throw
+                }
+                Complete-ConsoleStep -Result 'done'
                 $result.ExtractPath = $extract
 
                 # Listed with long-path support, since KAPE trees run deep.
@@ -376,7 +443,7 @@ function Resolve-CollectionInput {
                 Invoke-CollectionCleanup -Resolved $result
             }
             catch {
-                Write-Warning $_.Exception.Message
+                Write-RunWarning -Message $_.Exception.Message
             }
         }
     }
