@@ -13,7 +13,12 @@ $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHay
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
-$script:LibOrder = @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
+$script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
+# Console lines come out in colour only on a terminal. With NO_COLOR set
+# each line is one information record wherever the tests run, so the
+# assertions on them hold. tests\Console.Tests.ps1 covers colour itself.
+$env:NO_COLOR = '1'
+
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
@@ -221,6 +226,11 @@ function New-FakeHost {
         Write-TestText -Path (Join-Path -Path $d -ChildPath $k) -Line ([string[]]$Files[$k]) | Out-Null
     }
     return $d
+}
+
+function Get-TestToolVersion {
+    # $ToolVersion as the entry script sets it, so a release needs no test change.
+    return [regex]::Match([System.IO.File]::ReadAllText($script:MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
 }
 
 function Get-ThrownMessage {

@@ -284,19 +284,37 @@ Describe 'Progress lines' {
         $script:first = Invoke-Captured $P 'p1'
     }
 
-    It 'prints Completed lines with the detection count' {
-        $first.Info | Should -Contain '[1/4] P1 ... Completed, 3 detections'
-        $first.Info | Should -Contain '[2/4] P2 ... Completed, 1 detection'
+    It 'writes each host''s header as it starts, then a Hayabusa step with the detection count, then its status and time' {
+        $first.Info | Should -Contain '[1/4] P1  folder'
+        $first.Info | Should -Contain '[2/4] P2  folder'
+        @($first.Info | Where-Object { $_ -match '^ {6}Hayabusa +3 detections +\d+s$' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -match '^ {6}Hayabusa +1 detection +\d+s$' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -match '^ {6}Completed in \d+s$' }).Count | Should -Be 2
+        $p1 = [array]::IndexOf($first.Info, '[1/4] P1  folder')
+        $first.Info[$p1 + 1] | Should -Match '^ {6}Hayabusa +3 detections'
+        $first.Info[$p1 + 2] | Should -Match '^ {6}Completed in'
     }
-    It 'warns for Failed and CompletedWithErrors, with the reason' {
+    It 'warns for Failed and CompletedWithErrors, with the reason, and shows the step that failed' {
         @($first.Warn | Where-Object { $_ -like '`[3/4`] P3 ... Failed: Hayabusa exited with code 2.*No CSV was written.' }).Count | Should -Be 1
         @($first.Warn | Where-Object { $_ -like '`[4/4`] P4 ... CompletedWithErrors, 1 detection: Hayabusa exited with code 3.*' }).Count | Should -Be 1
-        @($first.Info | Where-Object { $_ -like '*P3*' -or $_ -like '*P4*' }).Count | Should -Be 0
+        @($first.Info | Where-Object { $_ -match '^ {6}Hayabusa +failed, exit code 2, no CSV written +\d+s$' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -match '^ {6}Hayabusa +exit code 3, 1 detection +\d+s$' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -match '^ {6}Failed in \d+s$' }).Count | Should -Be 1
+        @($first.Info | Where-Object { $_ -match '^ {6}CompletedWithErrors in \d+s$' }).Count | Should -Be 1
     }
-    It 'prints a skipped line on a rerun' {
+    It 'adds a summary row for each host' {
+        $rows = @(Get-ConsoleSummaryRow)
+        @($rows | ForEach-Object { $_.Collection }) | Should -Be @('P1', 'P2', 'P3', 'P4')
+        @($rows | ForEach-Object { $_.Status }) | Should -Be @('Completed', 'Completed', 'Failed', 'CompletedWithErrors')
+        $rows[0].Detections | Should -Be 3
+        $rows[2].Detections | Should -BeNullOrEmpty -Because 'a failed host has no counts, as on the dashboard'
+        $rows[0].Seconds | Should -BeGreaterOrEqual 0
+    }
+    It 'prints one line for each host skipped on a rerun' {
         $again = Invoke-Captured $P 'p2'
-        $again.Info | Should -Contain '[1/4] P1 ... skipped, already Completed'
-        $again.Info | Should -Contain '[4/4] P4 ... skipped, already CompletedWithErrors'
+        $again.Info | Should -Contain '[1/4] P1  skipped, already Completed'
+        $again.Info | Should -Contain '[4/4] P4  skipped, already CompletedWithErrors'
+        @($again.Info | Where-Object { $_ -like '*P1*' }).Count | Should -Be 1
     }
 }
 
@@ -329,8 +347,9 @@ Describe 'An unreadable zip at run time' {
         $zipRow.Error | Should -BeExactly $guide
         $zipRow.Warning | Should -BeExactly ''
     }
-    It 'refers back to the startup warning on its progress line' {
-        $zipInfo | Should -Contain '[1/1] BADZ ... Failed: ZIP not extracted, see the warning at the start'
+    It 'refers back to the note before the run on its closing line' {
+        $zipInfo | Should -Contain '[1/1] BADZ  ZIP'
+        $zipInfo | Should -Contain '      Failed, ZIP not extracted, see Before the run'
     }
     It 'puts the technical detail in the per-host log and does not run Hayabusa' {
         $log = Get-Content -LiteralPath (Join-TestPath $Z.Out 'BADZ' 'BADZ_hayabusa.log') -Raw

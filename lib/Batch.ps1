@@ -150,6 +150,7 @@ function Invoke-CollectionRun {
     $exitCode = $null
     $status = 'Failed'
     $identityStatus = $null
+    $identityHostname = $null
 
     try {
         # First, so however this run fails, the row can't link an earlier
@@ -185,18 +186,44 @@ function Invoke-CollectionRun {
         # Read where the collection already is, extracted or mounted, so it
         # is never extracted or mounted a second time. This never throws.
         if (-not [string]::IsNullOrEmpty($RECmdPath)) {
-            $identityStatus = (Invoke-CollectionIdentity -Collection $Collection.Collection -CollectionRoot $resolvedInput.Path -OutputRoot $OutputRoot -RECmdPath $RECmdPath).Status
+            $identity = Invoke-CollectionIdentity -Collection $Collection.Collection -CollectionRoot $resolvedInput.Path -OutputRoot $OutputRoot -RECmdPath $RECmdPath
+            $identityStatus = $identity['Status']
+            $identityHostname = $identity['Hostname']
         }
 
         $arguments = New-HayabusaArgument -InputPath $resolvedInput.Path -CsvPath $paths.Csv -HtmlPath $paths.Html `
             -Selection $Resolved.Selection -Threads $Threads
         Remove-PreviousHostOutput -Path $paths
-        $exitCode = Invoke-HayabusaProcess -HayabusaPath $HayabusaPath -Argument $arguments -LogPath $paths.Log
+        Start-ConsoleStep -Name 'Hayabusa'
+        try {
+            # Its latest output line shows in the progress bar. Hayabusa's
+            # output comes from the evidence, and the console sanitises it.
+            $exitCode = Invoke-HayabusaProcess -HayabusaPath $HayabusaPath -Argument $arguments -LogPath $paths.Log -OnLine {
+                param($line)
+                Update-ConsoleStep -Status $line -Elapsed
+            }
+            $summary = Get-HayabusaResultSummary -CsvPath $paths.Csv
+        }
+        catch {
+            Complete-ConsoleStep -Failed -Reason $_.Exception.Message
+            throw
+        }
         if ($exitCode -ne 0) {
             $errors.Add("Hayabusa exited with code $exitCode. See $($paths.Log).")
         }
-
-        $summary = Get-HayabusaResultSummary -CsvPath $paths.Csv
+        $counted = Format-DetectionCount -Count $summary.Detections
+        if ($exitCode -eq 0 -and $summary.Exists) {
+            Complete-ConsoleStep -Result $counted
+        }
+        elseif ($exitCode -eq 0) {
+            Complete-ConsoleStep -Failed -Reason 'no CSV written'
+        }
+        elseif ($summary.Exists) {
+            Complete-ConsoleStep -Result "exit code $exitCode, $counted"
+        }
+        else {
+            Complete-ConsoleStep -Failed -Reason "exit code $exitCode, no CSV written"
+        }
 
         if ($exitCode -eq 0 -and $summary.Exists) {
             $status = 'Completed'
@@ -291,7 +318,7 @@ function Invoke-CollectionRun {
                 -DurationSec $timer.Elapsed.TotalSeconds
         }
         catch {
-            Write-Warning "$($Collection.Collection): could not record the result in the manifest: $($_.Exception.Message)"
+            Write-RunWarning -Message "$($Collection.Collection): could not record the result in the manifest: $($_.Exception.Message)"
         }
     }
     $timer.Stop()
@@ -308,9 +335,10 @@ function Invoke-CollectionRun {
         Warnings       = $finalWarnings
         Errors         = $errors.ToArray()
         DurationSec    = $timer.Elapsed.TotalSeconds
-        OutputPath     = $paths.Directory
-        ImageHash      = $imageHash
-        IdentityStatus = $identityStatus
+        OutputPath       = $paths.Directory
+        ImageHash        = $imageHash
+        IdentityStatus   = $identityStatus
+        IdentityHostname = $identityHostname
     }
 }
 
@@ -392,14 +420,15 @@ function Invoke-CollectionBatch {
         an interrupted run, is processed. Collections run one at a time so
         Hayabusa can use every thread and only one image is mounted at once.
 
-        Each collection gets one progress line, such as
-        "[2/4] HOST01 ... Completed, 10 detections". Completed and skipped
-        lines go to the information stream. Failed and CompletedWithErrors
-        lines are warnings, except a ZIP already reported at startup as
+        Each collection gets a header line as it starts, a line for each
+        step as it finishes and a closing line with its status and time,
+        through lib\Console.ps1, and a row in the run's summary table. A
+        skipped collection gets one line. Failed and CompletedWithErrors
+        are also warnings, except a ZIP already reported before the run as
         unreadable, which is not warned about twice.
 
         With RECmdPath, each processed collection's host identity is read
-        as it runs, and its progress line ends with the identity status.
+        as it runs, as a step of its own.
 
         Returns a summary of the counts by outcome. If ImageHash is given,
         each processed collection's image hash record is stored in it by
@@ -463,6 +492,8 @@ function Invoke-CollectionBatch {
         Skipped             = 0
     }
 
+    Clear-ConsoleSummary
+    $total = $Collections.Count
     $index = 0
     foreach ($c in $Collections) {
         $index++
@@ -471,61 +502,83 @@ function Invoke-CollectionBatch {
             $row = $existing[$c.Collection]
         }
 
-        $prefix = "[$index/$($Collections.Count)] $($c.Collection) ..."
+        $prefix = "[$index/$total] $($c.Collection) ..."
         if (-not $Force -and $null -ne $row -and $script:FinishedStatuses -contains $row.Status) {
-            Write-Information "$prefix skipped, already $($row.Status)"
+            Write-ConsoleSkip -Index $index -Total $total -Name $c.Collection -Text "skipped, already $($row.Status)"
+            Add-ConsoleSummaryRow -Collection $c.Collection -Status 'Skipped'
             Write-Verbose "$($c.Collection): use -Force to rerun."
             $summary.Skipped++
             continue
         }
 
-        Write-Verbose "[$index/$($Collections.Count)] $($c.Collection): running."
+        Write-Verbose "[$index/$total] $($c.Collection): running."
         $summary.Processed++
+        Start-ConsoleHost -Index $index -Total $total -Name $c.Collection -Detail (Get-ConsoleCollectionDetail -Collection $c)
+        $seconds = $null
         try {
-            $result = Invoke-CollectionRun -Collection $c -OutputRoot $OutputRoot -HayabusaPath $HayabusaPath `
-                -Resolved $Resolved -Threads $Threads -RunId $RunId -ManifestPath $ManifestPath -KeepArtifacts:$KeepArtifacts -RECmdPath $RECmdPath
-        }
-        catch {
-            # Last line of defence: one collection must never abort the run.
-            $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Detections = 0; Errors = @("Unexpected error: $($_.Exception.Message)") }
-        }
-        $summary[$result.Status]++
-        if ($null -ne $ImageHash) {
-            $record = $null
-            if ($result.PSObject.Properties['ImageHash']) {
-                $record = $result.ImageHash
-            }
-            $ImageHash[$c.Collection] = $record
-        }
-        if ($null -ne $RunMeta -and -not [string]::IsNullOrEmpty($RunMetaPath)) {
             try {
-                Set-RunMetaImageHash -RunMeta $RunMeta -ImageHash $ImageHash
-                $RunMeta['Summary'] = $summary
-                Save-RunMeta -Path $RunMetaPath -RunMeta $RunMeta -Update | Out-Null
+                $result = Invoke-CollectionRun -Collection $c -OutputRoot $OutputRoot -HayabusaPath $HayabusaPath `
+                    -Resolved $Resolved -Threads $Threads -RunId $RunId -ManifestPath $ManifestPath -KeepArtifacts:$KeepArtifacts -RECmdPath $RECmdPath
             }
             catch {
-                Write-Warning "$($c.Collection): could not update the run metadata at ${RunMetaPath}: $($_.Exception.Message)"
+                # Last line of defence: one collection must never abort the run.
+                $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Detections = 0; Errors = @("Unexpected error: $($_.Exception.Message)") }
             }
-        }
+            $summary[$result.Status]++
+            if ($null -ne $ImageHash) {
+                $record = $null
+                if ($result.PSObject.Properties['ImageHash']) {
+                    $record = $result.ImageHash
+                }
+                $ImageHash[$c.Collection] = $record
+            }
+            if ($null -ne $RunMeta -and -not [string]::IsNullOrEmpty($RunMetaPath)) {
+                try {
+                    Set-RunMetaImageHash -RunMeta $RunMeta -ImageHash $ImageHash
+                    $RunMeta['Summary'] = $summary
+                    Save-RunMeta -Path $RunMetaPath -RunMeta $RunMeta -Update | Out-Null
+                }
+                catch {
+                    Write-RunWarning -Message "$($c.Collection): could not update the run metadata at ${RunMetaPath}: $($_.Exception.Message)"
+                }
+            }
 
-        $counted = Format-DetectionCount -Count $result.Detections
-        if ($result.PSObject.Properties['IdentityStatus'] -and $null -ne $result.IdentityStatus) {
-            $counted += ", identity $($result.IdentityStatus)"
-        }
-        if ($result.Status -eq 'Failed') {
-            if ((Test-ZipUnreadable -Collection $c) -and (@($result.Errors) -contains (Get-ZipGuidance -Source $c.Source -Info $c.Zip))) {
-                Write-Information "$prefix Failed: ZIP not extracted, see the warning at the start"
+            $counted = Format-DetectionCount -Count $result.Detections
+            if ($result.PSObject.Properties['IdentityStatus'] -and $null -ne $result.IdentityStatus) {
+                $counted += ", identity $($result.IdentityStatus)"
+            }
+            # A ZIP reported before the run as one this tool can't extract
+            # isn't warned about again. Its closing line points back there.
+            $zipRefused = ($result.Status -eq 'Failed' -and (Test-ZipUnreadable -Collection $c) -and (@($result.Errors) -contains (Get-ZipGuidance -Source $c.Source -Info $c.Zip)))
+            if ($result.Status -eq 'Failed' -and -not $zipRefused) {
+                Write-RunWarning -Message "$prefix Failed: $($result.Errors -join ' ')"
+            }
+            elseif ($result.Status -eq 'CompletedWithErrors') {
+                Write-RunWarning -Message "$prefix CompletedWithErrors, ${counted}: $($result.Errors -join ' ')"
+            }
+            if ($zipRefused) {
+                $seconds = Complete-ConsoleHost -Status 'Failed' -Reason 'ZIP not extracted, see Before the run' -NoTime
             }
             else {
-                Write-Warning "$prefix Failed: $($result.Errors -join ' ')"
+                $seconds = Complete-ConsoleHost -Status $result.Status
             }
         }
-        elseif ($result.Status -eq 'CompletedWithErrors') {
-            Write-Warning "$prefix CompletedWithErrors, ${counted}: $($result.Errors -join ' ')"
+        finally {
+            Complete-ConsoleProgress
         }
-        else {
-            Write-Information "$prefix $($result.Status), $counted"
+
+        $identityStatus = ''
+        $identityHostname = ''
+        if ($result.PSObject.Properties['IdentityStatus'] -and $null -ne $result.IdentityStatus) {
+            $identityStatus = [string]$result.IdentityStatus
+            $identityHostname = [string]$result.IdentityHostname
         }
+        # A count only for a host with results, the way the dashboard shows it.
+        $detections = $null
+        if ($script:FinishedStatuses -contains $result.Status) {
+            $detections = $result.Detections
+        }
+        Add-ConsoleSummaryRow -Collection $c.Collection -Status $result.Status -Detections $detections -Identity $identityStatus -Computer $identityHostname -Seconds $seconds
     }
 
     return $summary
@@ -605,7 +658,7 @@ function Invoke-CollectionIdentityRun {
             Save-HostIdentity -OutputRoot $OutputRoot -Identity $identity | Out-Null
         }
         catch {
-            Write-Warning "$($Collection.Collection): could not save the host identity: $($_.Exception.Message)"
+            Write-RunWarning -Message "$($Collection.Collection): could not save the host identity: $($_.Exception.Message)"
         }
     }
 
@@ -627,10 +680,10 @@ function Invoke-IdentityBatch {
     .DESCRIPTION
         For -IdentityOnly. A collection whose identity is already Complete,
         or NoRegistryHives, is skipped unless -Force is given, the same way
-        a normal run skips a finished host. Each collection gets one
-        progress line, such as "[2/4] HOST01 ... identity Complete,
-        WS01". Failed lines are warnings, except a ZIP already reported at
-        startup as unreadable. Returns the counts by outcome.
+        a normal run skips a finished host. Each collection is shown as a
+        header, its steps and a closing line, the same as in a normal run.
+        Failed is also a warning, except a ZIP already reported before the
+        run as unreadable. Returns the counts by outcome.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -662,10 +715,12 @@ function Invoke-IdentityBatch {
         Skipped         = 0
     }
 
+    Clear-ConsoleSummary
+    $total = $Collections.Count
     $index = 0
     foreach ($c in $Collections) {
         $index++
-        $prefix = "[$index/$($Collections.Count)] $($c.Collection) ..."
+        $prefix = "[$index/$total] $($c.Collection) ..."
         if (-not $Force) {
             $existing = Read-HostIdentity -OutputRoot $OutputRoot -Collection $c.Collection
             $done = $null
@@ -673,7 +728,9 @@ function Invoke-IdentityBatch {
                 $done = [string](Get-JsonValue -Object $existing.Identity -Name 'Status')
             }
             if ($done -eq 'Complete' -or $done -eq 'NoRegistryHives') {
-                Write-Information "$prefix skipped, identity already $done"
+                Write-ConsoleSkip -Index $index -Total $total -Name $c.Collection -Text "skipped, identity already $done"
+                $computer = [string](Get-JsonValue -Object $existing.Identity -Name 'Hostname')
+                Add-ConsoleSummaryRow -Collection $c.Collection -Identity 'Skipped' -Computer $computer
                 Write-Verbose "$($c.Collection): use -Force to read it again."
                 $summary.Skipped++
                 continue
@@ -681,39 +738,46 @@ function Invoke-IdentityBatch {
         }
 
         $summary.Processed++
+        Start-ConsoleHost -Index $index -Total $total -Name $c.Collection -Detail (Get-ConsoleCollectionDetail -Collection $c)
+        $seconds = $null
         try {
-            $result = Invoke-CollectionIdentityRun -Collection $c -OutputRoot $OutputRoot -RECmdPath $RECmdPath -Limits $Limits -KeepArtifacts:$KeepArtifacts
-        }
-        catch {
-            # Last line of defence: one collection must never abort the run.
-            $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Hostname = $null; Notes = @("Unexpected error: $($_.Exception.Message)"); Errors = @(); ImageHash = $null }
-        }
-        if ($summary.Contains([string]$result.Status)) {
-            $summary[[string]$result.Status]++
-        }
-        else {
-            $summary.Failed++
-        }
-
-        $name = ''
-        if (-not [string]::IsNullOrEmpty($result.Hostname)) {
-            $name = ", $($result.Hostname)"
-        }
-        $evidence = @($result.Errors | Where-Object { ([string]$_).StartsWith($script:EvidenceChangedPrefix) })
-        if ($evidence.Count -gt 0) {
-            Write-Warning "$prefix identity $($result.Status)${name}: $($evidence[0])"
-        }
-        elseif ($result.Status -eq 'Failed') {
-            if ((Test-ZipUnreadable -Collection $c) -and (@($result.Notes) -contains (Get-ZipGuidance -Source $c.Source -Info $c.Zip))) {
-                Write-Information "$prefix identity Failed: ZIP not extracted, see the warning at the start"
+            try {
+                $result = Invoke-CollectionIdentityRun -Collection $c -OutputRoot $OutputRoot -RECmdPath $RECmdPath -Limits $Limits -KeepArtifacts:$KeepArtifacts
+            }
+            catch {
+                # Last line of defence: one collection must never abort the run.
+                $result = [pscustomobject]@{ Collection = $c.Collection; Status = 'Failed'; Hostname = $null; Notes = @("Unexpected error: $($_.Exception.Message)"); Errors = @(); ImageHash = $null }
+            }
+            if ($summary.Contains([string]$result.Status)) {
+                $summary[[string]$result.Status]++
             }
             else {
-                Write-Warning "$prefix identity Failed: $(@($result.Notes) -join ' ')"
+                $summary.Failed++
+            }
+
+            $name = ''
+            if (-not [string]::IsNullOrEmpty($result.Hostname)) {
+                $name = ", $($result.Hostname)"
+            }
+            $zipRefused = ($result.Status -eq 'Failed' -and (Test-ZipUnreadable -Collection $c) -and (@($result.Notes) -contains (Get-ZipGuidance -Source $c.Source -Info $c.Zip)))
+            $evidence = @($result.Errors | Where-Object { ([string]$_).StartsWith($script:EvidenceChangedPrefix) })
+            if ($evidence.Count -gt 0) {
+                Write-RunWarning -Message "$prefix identity $($result.Status)${name}: $($evidence[0])"
+            }
+            elseif ($result.Status -eq 'Failed' -and -not $zipRefused) {
+                Write-RunWarning -Message "$prefix identity Failed: $(@($result.Notes) -join ' ')"
+            }
+            if ($zipRefused) {
+                $seconds = Complete-ConsoleHost -Status 'Failed' -Reason 'ZIP not extracted, see Before the run' -NoTime
+            }
+            else {
+                $seconds = Complete-ConsoleHost -Status ([string]$result.Status)
             }
         }
-        else {
-            Write-Information "$prefix identity $($result.Status)$name"
+        finally {
+            Complete-ConsoleProgress
         }
+        Add-ConsoleSummaryRow -Collection $c.Collection -Identity ([string]$result.Status) -Computer ([string]$result.Hostname) -Seconds $seconds
     }
 
     return $summary

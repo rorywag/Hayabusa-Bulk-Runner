@@ -218,6 +218,9 @@ function Invoke-HayabusaProcess {
         The log starts with the time, the binary and the exact argument
         list, one per line, for the record. Hayabusa's stdout and stderr
         follow as they arrive, then the exit code. Returns the exit code.
+        OnLine, if given, is also called with each line, for showing
+        progress. Hayabusa's output comes from the evidence, so whatever
+        OnLine shows must be sanitised first.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([int])]
@@ -229,7 +232,9 @@ function Invoke-HayabusaProcess {
         [string[]]$Argument,
 
         [Parameter(Mandatory)]
-        [string]$LogPath
+        [string]$LogPath,
+
+        [scriptblock]$OnLine
     )
 
     Assert-HayabusaHost
@@ -250,9 +255,15 @@ function Invoke-HayabusaProcess {
         $writer.WriteLine('--- output ---')
         $writer.Flush()
 
+        # Held under another name, since the block below runs inside
+        # Invoke-NativeCapture, where $OnLine is that block itself.
+        $lineCallback = $OnLine
         $exit = Invoke-NativeCapture -FilePath $HayabusaPath -Argument $Argument -OnLine {
             param($line)
             $writer.WriteLine($line)
+            if ($null -ne $lineCallback) {
+                & $lineCallback $line
+            }
         }
 
         $writer.WriteLine('--- end ---')

@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 7
+$script:RunMetaSchemaVersion = 8
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -86,8 +86,18 @@ function New-RunMeta {
         [object]$Threads,
 
         [bool]$Force,
-        [bool]$KeepArtifacts
+        [bool]$KeepArtifacts,
+
+        # The run log that holds the console's lines for this run.
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$RunLogPath
     )
+
+    $runLog = $null
+    if (-not [string]::IsNullOrEmpty($RunLogPath)) {
+        $runLog = $RunLogPath
+    }
 
     $configRecord = $null
     if ($null -ne $Config) {
@@ -104,6 +114,7 @@ function New-RunMeta {
         CompletedUtc    = $null
         Summary         = $null
         Rollup          = $null
+        RunLog          = $runLog
         Tool            = [ordered]@{
             Name              = 'Invoke-BulkHayabusa'
             Version           = $ToolVersion

@@ -88,7 +88,7 @@ Describe 'Mounting a real VHDX' -Tag 'Mount' -Skip:(-not $canMount) {
     It 'runs the whole tool against it and leaves the parent unchanged' {
         $hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
         $out = Join-TestPath $TestDrive 'out-main'
-        $r = & $MainScript -InputRoot $in -OutputRoot $out -HayabusaPath $hb -WarningAction SilentlyContinue
+        $r = & $MainScript -PassThru -InputRoot $in -OutputRoot $out -HayabusaPath $hb -WarningAction SilentlyContinue
         $row = (Get-RunManifest -Path $r.ManifestPath)['HOST01']
         $row.Status | Should -Be 'Completed'
         $row.Host | Should -Be 'WS01'

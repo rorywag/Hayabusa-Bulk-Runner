@@ -1739,7 +1739,7 @@ function Get-HostIdentity {
                 Remove-DirectoryTree -Path $work
             }
             catch {
-                Write-Warning "Could not remove the host identity work folder $work. Delete it by hand: it holds copies of $Collection's hives, SAM included, and RECmd's full output. $($_.Exception.Message)"
+                Write-RunWarning -Message "Could not remove the host identity work folder $work. Delete it by hand: it holds copies of $Collection's hives, SAM included, and RECmd's full output. $($_.Exception.Message)"
             }
         }
     }
@@ -1889,6 +1889,7 @@ function Invoke-CollectionIdentity {
         [string]$RECmdPath
     )
 
+    Start-ConsoleStep -Name 'Read identity'
     try {
         $identity = Get-HostIdentity -Collection $Collection -CollectionRoot $CollectionRoot -OutputRoot $OutputRoot -RECmdPath $RECmdPath
     }
@@ -1899,7 +1900,17 @@ function Invoke-CollectionIdentity {
         Save-HostIdentity -OutputRoot $OutputRoot -Identity $identity | Out-Null
     }
     catch {
-        Write-Warning "${Collection}: could not save the host identity: $($_.Exception.Message)"
+        Write-RunWarning -Message "${Collection}: could not save the host identity: $($_.Exception.Message)"
     }
+    # The step's result is the identity's status, then the registry
+    # computer name, or the first note when it failed.
+    $result = [string]$identity['Status']
+    if (-not [string]::IsNullOrEmpty([string]$identity['Hostname'])) {
+        $result += ", $($identity['Hostname'])"
+    }
+    elseif ($result -eq 'Failed' -and @($identity['Notes']).Count -gt 0) {
+        $result += ", $(@($identity['Notes'])[0])"
+    }
+    Complete-ConsoleStep -Result $result
     return $identity
 }

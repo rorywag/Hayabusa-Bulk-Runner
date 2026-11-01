@@ -35,10 +35,14 @@
     triage dashboard. Without RECmdPath, host identity is not read.
     -IdentityOnly reads host identity alone, without running Hayabusa.
 
-    A normal run prints one progress line per collection and a short
-    summary at the end, through the information stream. Problems are
-    warnings. -Verbose adds the detail. -InformationAction SilentlyContinue
-    hides the progress lines.
+    The console shows a header for the run, any notes before it starts, a
+    block for each host with a line per step as it finishes, and a summary
+    table at the end, through the information stream, with live progress
+    bars during long steps. Problems are warnings. Every run also writes
+    the same lines, timestamped in UTC, to OutputRoot\_runs\run_<time>_<RunId>.log.
+    -Verbose adds detail. -InformationAction SilentlyContinue hides the
+    console lines, leaving the warnings, and the run log is still written.
+    Nothing is returned unless -PassThru is given.
 
 .PARAMETER InputRoot
     Parent folder holding one entry per host.
@@ -77,6 +81,10 @@
     A collection whose identity is already Complete is skipped unless
     -Force is given. The manifest and run-meta are not written.
 
+.PARAMETER PassThru
+    Return an object describing the run, for scripting against. Without
+    it the script returns nothing.
+
 .PARAMETER Help
     Print a short usage summary and stop. -h does the same. Nothing is
     read or written.
@@ -91,7 +99,17 @@
     .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
 
 .EXAMPLE
+    $run = .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -PassThru
+    $run.Summary.Failed
+
+.EXAMPLE
     .\Invoke-BulkHayabusa.ps1 -Help
+
+.OUTPUTS
+    None, unless -PassThru is given. Then a PSCustomObject with RunId,
+    ManifestPath, RunMetaPath, RunLogPath, Summary, the counts by outcome,
+    Rollup, Identity and Collections. With -IdentityOnly it has Summary,
+    Identity, RunLogPath and Collections.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
@@ -133,6 +151,10 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Identity')]
     [switch]$IdentityOnly,
 
+    [Parameter(ParameterSetName = 'Run')]
+    [Parameter(ParameterSetName = 'Identity')]
+    [switch]$PassThru,
+
     # In a set of its own, so -Help binds without asking for the required
     # parameters.
     [Parameter(ParameterSetName = 'Help')]
@@ -162,6 +184,7 @@ if ($Help) {
         '  -KeepArtifacts  Keep extracted ZIPs and differencing disks after each host, for debugging'
         '  -ConfigPath     Engagement config .psd1 for ExactLevel, tag filters, a time window and more'
         '  -IdentityOnly   Read host identity with RECmd only, no Hayabusa. Needs RECmdPath in the config, not -HayabusaPath'
+        '  -PassThru       Return an object describing the run, for scripting'
         ''
         'Examples:'
         '  .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe'
@@ -182,9 +205,14 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $ToolVersion = '0.10.1'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
+foreach ($lib in @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
+
+# Console lines are held until the run log opens, so the log starts with
+# every one of them.
+Initialize-ConsoleOutput -BufferLog
+$runWatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 # Paths
 $InputRoot = ConvertTo-NormalizedPath -Path $InputRoot
@@ -217,6 +245,17 @@ if ($IdentityOnly -and $null -eq $recmdPath) {
     throw '-IdentityOnly needs RECmdPath, the full path of RECmd.exe, set in the engagement config given with -ConfigPath.'
 }
 
+# Warnings from checking the settings and reading InputRoot are shown as
+# notes under Before the run, once the header is out. While information
+# lines are on screen they're only recorded here, so nothing shows twice,
+# and in quiet mode they're shown as warnings as they come.
+$early = @{}
+if (Test-ConsoleInformationShown) {
+    $early['WarningAction'] = 'SilentlyContinue'
+}
+$settingWarnings = $null
+$discoveryWarnings = $null
+
 if ($IdentityOnly) {
     # Only the ZIP limits apply. Hayabusa and its settings aren't used.
     $limits = Resolve-ZipLimit -Config $config
@@ -227,7 +266,7 @@ else {
         $commandLine['MinLevel'] = $MinLevel
     }
 
-    $resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath
+    $resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath -WarningVariable settingWarnings @early
 }
 
 $threadsValue = $null
@@ -237,201 +276,285 @@ if ($PSBoundParameters.ContainsKey('Threads')) {
 
 # Discovery reads InputRoot and lists ZIP entries. Nothing is extracted,
 # mounted or written until the checks below pass.
-$collections = @(Get-InputCollection -InputRoot $InputRoot)
+$collections = @(Get-InputCollection -InputRoot $InputRoot -WarningVariable discoveryWarnings @early)
 Assert-UniqueCollectionName -Collections $collections
 Assert-CollectionNameAllowed -Collections $collections
 Write-Verbose "Discovered $($collections.Count) collection(s)."
 
-# ZIPs this tool cannot extract: one short warning line each, listed here
-# before a long run starts, then the advice once in normal output. The
-# collection's own progress line later refers back to this warning.
-$unreadableZips = @($collections | Where-Object { $_.InputType -eq 'Zip' -and $null -ne $_.Zip -and -not $_.Zip.Readable })
-if ($unreadableZips.Count -gt 0) {
-    foreach ($z in $unreadableZips) {
-        Write-Warning "$($z.Source) can't be extracted by this tool ($(Get-ZipReadReasonText -Info $z.Zip))."
-    }
-    Write-Information '  To include them, extract each one yourself, put the extracted folder in InputRoot, and rerun. Hosts already done are skipped.'
-    foreach ($z in $unreadableZips) {
-        $images = @($z.Zip.ImageEntries)
-        if ($images.Count -gt 0) {
-            $leaf = ($images | ForEach-Object { ($_ -split '[\\/]')[-1] }) -join ', '
-            Write-Information "  $($z.Source) holds a disk image: put the extracted $leaf directly in InputRoot."
-        }
-    }
-}
-
 # Fail before anything is written if disk images need an elevated session.
 Assert-ElevationForContainer -Collections $collections
 
-# Each disk image is read in full twice, so say so before a long run starts.
-$imageCount = @($collections | Where-Object { $_.InputType -eq 'Vhd' -or $_.InputType -eq 'Vhdx' -or ($_.InputType -eq 'Zip' -and $null -ne $_.Zip -and $_.Zip.Readable -and @($_.Zip.ImageEntries).Count -gt 0) }).Count
-if ($imageCount -gt 0) {
-    Write-Information "$imageCount disk image(s) will be hashed with SHA-256 before mounting and again after teardown, to show each is unchanged. Each hash reads the whole image, so expect a pause on a large one. Hosts already finished are skipped and not hashed."
-}
-
-if ($IdentityOnly) {
-    Write-Information "Reading host identity only, with RECmd at $recmdPath. Hayabusa is not run."
-    if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
-        New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
-        Write-Verbose "Created OutputRoot: $OutputRoot"
+$hayabusaVersion = $null
+$rulesVersion = $null
+if (-not $IdentityOnly) {
+    if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
+        throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
     }
-
-    $identityBatch = Invoke-IdentityBatch -Collections $collections -OutputRoot $OutputRoot -RECmdPath $recmdPath -Limits $limits `
-        -Force:$Force -KeepArtifacts:$KeepArtifacts
-
-    $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
-    try {
-        $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection })
-        $identityRecord.Dashboard = $identityRollup.Dashboard
-        $identityRecord.HostCount = $identityRollup.HostCount
-    }
-    catch {
-        $identityRecord.Error = $_.Exception.Message
-        Write-Warning "Identity dashboard failed: $($_.Exception.Message)"
-    }
-
-    Write-Information ("Done: {0} processed, {1} complete, {2} partial, {3} failed, {4} with no registry hives, {5} skipped." -f
-        $identityBatch.Processed, $identityBatch.Complete, $identityBatch.Partial, $identityBatch.Failed, $identityBatch.NoRegistryHives, $identityBatch.Skipped)
-    if ($null -eq $identityRecord.Error) {
-        Write-Information "Output is in $OutputRoot. Open identity_dashboard.html there for host identity."
-    }
-    else {
-        Write-Information "Output is in $OutputRoot. The identity dashboard could not be built, see the warning above."
-    }
-
-    return [pscustomobject]@{
-        Summary     = $identityBatch
-        Identity    = $identityRecord
-        Collections = $collections
-    }
+    # Provenance for run-meta. A failed version read is recorded, not fatal.
+    $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
+    $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
+    Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
 }
 
-if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
-    throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
-}
-
-# Provenance for run-meta. A failed version read is recorded, not fatal.
-$hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
-if ($null -ne $hayabusaVersion.Error) {
-    Write-Warning "Could not read the Hayabusa version: $($hayabusaVersion.Error)"
-}
-$versionNotice = Get-HayabusaVersionNotice -VersionLine $hayabusaVersion.Version
-if ($null -ne $versionNotice) {
-    Write-Warning $versionNotice
-}
-$levelNotice = Get-SeverityLevelNotice -Selection $resolved.Selection
-if ($null -ne $levelNotice) {
-    Write-Warning $levelNotice
-}
-$rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
-Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
-if ($null -ne $recmdPath) {
-    Write-Information "Host identity will also be read from each collection's registry hives, with RECmd at $recmdPath."
-}
-
-# Run setup
+# Run setup. From here on the run has an id and a log.
 if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
     New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
     Write-Verbose "Created OutputRoot: $OutputRoot"
 }
-
 $runId = [guid]::NewGuid().ToString()
 $startedUtc = (Get-Date).ToUniversalTime()
-
-$manifestPath = Join-Path -Path $OutputRoot -ChildPath 'run_manifest.csv'
-Initialize-RunManifest -Path $manifestPath | Out-Null
-$added = Add-PendingCollection -Path $manifestPath -Collections $collections -RunId $runId
-Write-Verbose "Manifest: $added new collection(s) recorded as Pending."
-
-$runMeta = New-RunMeta `
-    -RunId $runId `
-    -StartedUtc $startedUtc `
-    -ToolVersion $ToolVersion `
-    -InputRoot $InputRoot `
-    -OutputRoot $OutputRoot `
-    -HayabusaPath $HayabusaPath `
-    -Resolved $resolved `
-    -Config $config `
-    -Collections $collections `
-    -HayabusaVersion $hayabusaVersion `
-    -RulesVersion $rulesVersion `
-    -Threads $threadsValue `
-    -Force $Force.IsPresent `
-    -KeepArtifacts $KeepArtifacts.IsPresent
-
-$runMetaPath = Get-RunMetaPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId
-Save-RunMeta -Path $runMetaPath -RunMeta $runMeta | Out-Null
-
+Open-ConsoleRunLog -Path (Get-RunLogPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId)
 Write-Verbose "RunId $runId"
-Write-Verbose "Manifest: $manifestPath"
-Write-Verbose "Run metadata: $runMetaPath"
 
-$imageHashes = [ordered]@{}
-$batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
-    -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
-    -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes -RunMeta $runMeta -RunMetaPath $runMetaPath -RECmdPath $recmdPath
-Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
-
-# A rollup failure is recorded and reported, and never hides the batch
-# results already in the manifest.
-$rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Dashboard = $null; HostCount = $null; RuleCount = $null; Error = $null }
 try {
-    $rollup = Invoke-Rollup -OutputRoot $OutputRoot
-    $rollupRecord.HostsCsv = $rollup.HostsCsv
-    $rollupRecord.RulesCsv = $rollup.RulesCsv
-    $rollupRecord.Dashboard = $rollup.Dashboard
-    $rollupRecord.HostCount = $rollup.HostCount
-    $rollupRecord.RuleCount = $rollup.RuleCount
-}
-catch {
-    $rollupRecord.Error = $_.Exception.Message
-    Write-Warning "Rollup failed: $($_.Exception.Message). Rebuild it with Invoke-HayabusaRollup.ps1 -OutputRoot $OutputRoot"
-}
-
-# Only when RECmd is set. Kept out of run-meta, and a failure here never
-# hides the triage results.
-$identityRecord = $null
-if ($null -ne $recmdPath) {
-    $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
-    try {
-        $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection })
-        $identityRecord.Dashboard = $identityRollup.Dashboard
-        $identityRecord.HostCount = $identityRollup.HostCount
-    }
-    catch {
-        $identityRecord.Error = $_.Exception.Message
-        Write-Warning "Identity dashboard failed: $($_.Exception.Message)"
-    }
-}
-
-$runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
-$runMeta['Summary'] = $batch
-$runMeta['Rollup'] = $rollupRecord
-Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
-
-Write-Information ("Done: {0} processed, {1} completed, {2} completed with errors, {3} failed, {4} skipped." -f
-    $batch.Processed, $batch.Completed, $batch.CompletedWithErrors, $batch.Failed, $batch.Skipped)
-if ($null -eq $rollupRecord.Error) {
-    Write-Information "Output is in $OutputRoot. Open triage_dashboard.html there to start triage."
-}
-else {
-    Write-Information "Output is in $OutputRoot. The dashboard could not be built, see the warning above."
-}
-if ($null -ne $identityRecord) {
-    if ($null -eq $identityRecord.Error) {
-        Write-Information 'Open identity_dashboard.html there for host identity.'
+    # Header
+    $valueWidth = (Get-ConsoleUsableWidth) - 10
+    $inputSummary = Get-ConsoleInputSummary -Collections $collections
+    $header = [ordered]@{}
+    $header['Input'] = "$(Format-ConsolePath -Path $InputRoot -Width ($valueWidth - $inputSummary.Length - 2)), $inputSummary"
+    $header['Output'] = Format-ConsolePath -Path $OutputRoot -Width $valueWidth
+    if ($IdentityOnly) {
+        $title = "Hayabusa-Bulk-Runner $ToolVersion, reading host identity only, Hayabusa is not run"
     }
     else {
-        Write-Information 'The identity dashboard could not be built, see the warning above.'
+        $title = "Hayabusa-Bulk-Runner $ToolVersion, running Hayabusa"
+        if ($null -ne $recmdPath) {
+            $title += ' and reading host identity'
+        }
+        $number = Get-HayabusaVersionNumber -VersionLine $hayabusaVersion.Version
+        if ($null -eq $number) {
+            $number = 'version not read'
+        }
+        $header['Hayabusa'] = "$number, $(Format-ConsolePath -Path $HayabusaPath -Width ($valueWidth - $number.Length - 2))"
+        $header['Rules'] = $rulesVersion.Summary
+    }
+    if ($null -ne $recmdPath) {
+        $header['RECmd'] = Format-ConsolePath -Path $recmdPath -Width $valueWidth
+    }
+    Write-ConsoleHeader -Title $title -Field $header
+
+    # Before the run, only when there's something to say.
+    $unreadableZips = @($collections | Where-Object { $_.InputType -eq 'Zip' -and $null -ne $_.Zip -and -not $_.Zip.Readable })
+    $imageCount = @($collections | Where-Object { $_.InputType -eq 'Vhd' -or $_.InputType -eq 'Vhdx' -or ($_.InputType -eq 'Zip' -and $null -ne $_.Zip -and $_.Zip.Readable -and @($_.Zip.ImageEntries).Count -gt 0) }).Count
+    $notices = New-Object System.Collections.Generic.List[string]
+    if (-not $IdentityOnly) {
+        if ($null -ne $hayabusaVersion.Error) {
+            $notices.Add("Could not read the Hayabusa version: $($hayabusaVersion.Error)")
+        }
+        $versionNotice = Get-HayabusaVersionNotice -VersionLine $hayabusaVersion.Version
+        if ($null -ne $versionNotice) {
+            $notices.Add($versionNotice)
+        }
+        $levelNotice = Get-SeverityLevelNotice -Selection $resolved.Selection
+        if ($null -ne $levelNotice) {
+            $notices.Add($levelNotice)
+        }
+    }
+    $earlyWarnings = @(@($settingWarnings) + @($discoveryWarnings) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.Message })
+    if ($earlyWarnings.Count -gt 0 -or $notices.Count -gt 0 -or $unreadableZips.Count -gt 0 -or $imageCount -gt 0) {
+        Write-ConsoleSection -Title 'Before the run'
+        foreach ($w in $earlyWarnings) {
+            Write-ConsoleNotice -Warning $w -Recorded
+        }
+        foreach ($n in $notices) {
+            Write-ConsoleNotice -Warning $n
+        }
+        # A ZIP this tool can't extract: one short line each, then the
+        # advice once. The host's own closing line points back here.
+        foreach ($z in $unreadableZips) {
+            $reason = Get-ZipReadReasonText -Info $z.Zip
+            Write-ConsoleNotice -Warning "$($z.Source) can't be extracted by this tool ($reason)." -Display "$($z.Source) can't be extracted, $reason."
+        }
+        if ($unreadableZips.Count -eq 1) {
+            Write-ConsoleNote -Indent 4 -Text 'Extract it yourself and put the folder in InputRoot, then rerun and finished hosts are skipped.'
+        }
+        elseif ($unreadableZips.Count -gt 1) {
+            Write-ConsoleNote -Indent 4 -Text 'Extract each one yourself and put its folder in InputRoot, then rerun and finished hosts are skipped.'
+        }
+        foreach ($z in $unreadableZips) {
+            $images = @($z.Zip.ImageEntries)
+            if ($images.Count -gt 0) {
+                $leaf = ($images | ForEach-Object { ($_ -split '[\\/]')[-1] }) -join ', '
+                Write-ConsoleNote -Indent 4 -Text "$($z.Source) holds a disk image, so put the extracted $leaf directly in InputRoot."
+            }
+        }
+        # Each disk image is read in full twice, so say so before a long run.
+        if ($imageCount -eq 1) {
+            Write-ConsoleNote -Text '1 disk image is hashed before mounting and again after teardown, so it''s read in full twice.'
+        }
+        elseif ($imageCount -gt 1) {
+            Write-ConsoleNote -Text "$imageCount disk images are hashed before mounting and again after teardown, so each is read in full twice."
+        }
+    }
+    Write-ConsoleLine -Segment @('') -NoLog
+
+    if ($IdentityOnly) {
+        $identityBatch = Invoke-IdentityBatch -Collections $collections -OutputRoot $OutputRoot -RECmdPath $recmdPath -Limits $limits `
+            -Force:$Force -KeepArtifacts:$KeepArtifacts
+
+        $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
+        $dashboardWarnings = $null
+        try {
+            $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection }) -WarningVariable dashboardWarnings
+            $identityRecord.Dashboard = $identityRollup.Dashboard
+            $identityRecord.HostCount = $identityRollup.HostCount
+        }
+        catch {
+            $identityRecord.Error = $_.Exception.Message
+            Write-RunWarning -Message "Identity dashboard failed: $($_.Exception.Message)"
+        }
+        foreach ($w in @($dashboardWarnings)) {
+            Write-ConsoleLogLine -Text "WARNING $w"
+        }
+
+        Write-ConsoleSummary -ShowIdentity
+        Write-ConsoleLine -Segment @(("{0} processed, {1} complete, {2} partial, {3} failed, {4} with no registry hives, {5} skipped, in {6}." -f
+                $identityBatch.Processed, $identityBatch.Complete, $identityBatch.Partial, $identityBatch.Failed, $identityBatch.NoRegistryHives, $identityBatch.Skipped,
+                (Format-ConsoleDuration -Seconds $runWatch.Elapsed.TotalSeconds)))
+        if ($null -eq $identityRecord.Error) {
+            Write-ConsoleLine -Segment @('Identity dashboard   ', $identityRecord.Dashboard)
+        }
+        else {
+            Write-ConsoleLine -Segment @('Identity dashboard   could not be built, see the warning above')
+        }
+        $runLog = Get-ConsoleRunLogPath
+        if ($null -ne $runLog) {
+            Write-ConsoleLine -Segment @('Run log              ', $runLog)
+        }
+
+        if ($PassThru) {
+            [pscustomobject]@{
+                Summary     = $identityBatch
+                Identity    = $identityRecord
+                RunLogPath  = $runLog
+                Collections = $collections
+            }
+        }
+        return
+    }
+
+    $manifestPath = Join-Path -Path $OutputRoot -ChildPath 'run_manifest.csv'
+    Initialize-RunManifest -Path $manifestPath | Out-Null
+    $added = Add-PendingCollection -Path $manifestPath -Collections $collections -RunId $runId
+    Write-Verbose "Manifest: $added new collection(s) recorded as Pending."
+
+    $runMeta = New-RunMeta `
+        -RunId $runId `
+        -StartedUtc $startedUtc `
+        -ToolVersion $ToolVersion `
+        -InputRoot $InputRoot `
+        -OutputRoot $OutputRoot `
+        -HayabusaPath $HayabusaPath `
+        -Resolved $resolved `
+        -Config $config `
+        -Collections $collections `
+        -HayabusaVersion $hayabusaVersion `
+        -RulesVersion $rulesVersion `
+        -Threads $threadsValue `
+        -Force $Force.IsPresent `
+        -KeepArtifacts $KeepArtifacts.IsPresent `
+        -RunLogPath (Get-ConsoleRunLogPath)
+
+    $runMetaPath = Get-RunMetaPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId
+    Save-RunMeta -Path $runMetaPath -RunMeta $runMeta | Out-Null
+
+    Write-Verbose "Manifest: $manifestPath"
+    Write-Verbose "Run metadata: $runMetaPath"
+
+    $imageHashes = [ordered]@{}
+    $batch = Invoke-CollectionBatch -Collections $collections -ManifestPath $manifestPath -OutputRoot $OutputRoot `
+        -HayabusaPath $HayabusaPath -Resolved $resolved -Threads $threadsValue -RunId $runId `
+        -Force:$Force -KeepArtifacts:$KeepArtifacts -ImageHash $imageHashes -RunMeta $runMeta -RunMetaPath $runMetaPath -RECmdPath $recmdPath
+    Set-RunMetaImageHash -RunMeta $runMeta -ImageHash $imageHashes
+
+    # A rollup failure is recorded and reported, and never hides the batch
+    # results already in the manifest. The rollup's own warnings are shown
+    # as it writes them and go in the run log after.
+    $rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Dashboard = $null; HostCount = $null; RuleCount = $null; Error = $null }
+    $rollupWarnings = $null
+    try {
+        $rollup = Invoke-Rollup -OutputRoot $OutputRoot -WarningVariable rollupWarnings
+        $rollupRecord.HostsCsv = $rollup.HostsCsv
+        $rollupRecord.RulesCsv = $rollup.RulesCsv
+        $rollupRecord.Dashboard = $rollup.Dashboard
+        $rollupRecord.HostCount = $rollup.HostCount
+        $rollupRecord.RuleCount = $rollup.RuleCount
+    }
+    catch {
+        $rollupRecord.Error = $_.Exception.Message
+        Write-RunWarning -Message "Rollup failed: $($_.Exception.Message). Rebuild it with Invoke-HayabusaRollup.ps1 -OutputRoot $OutputRoot"
+    }
+    foreach ($w in @($rollupWarnings)) {
+        Write-ConsoleLogLine -Text "WARNING $w"
+    }
+
+    # Only when RECmd is set. Kept out of run-meta, and a failure here never
+    # hides the triage results.
+    $identityRecord = $null
+    if ($null -ne $recmdPath) {
+        $identityRecord = [ordered]@{ Dashboard = $null; HostCount = $null; Error = $null }
+        $dashboardWarnings = $null
+        try {
+            $identityRollup = Invoke-IdentityRollup -OutputRoot $OutputRoot -Collection @($collections | ForEach-Object { $_.Collection }) -WarningVariable dashboardWarnings
+            $identityRecord.Dashboard = $identityRollup.Dashboard
+            $identityRecord.HostCount = $identityRollup.HostCount
+        }
+        catch {
+            $identityRecord.Error = $_.Exception.Message
+            Write-RunWarning -Message "Identity dashboard failed: $($_.Exception.Message)"
+        }
+        foreach ($w in @($dashboardWarnings)) {
+            Write-ConsoleLogLine -Text "WARNING $w"
+        }
+    }
+
+    $runMeta['CompletedUtc'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
+    $runMeta['Summary'] = $batch
+    $runMeta['Rollup'] = $rollupRecord
+    Save-RunMeta -Path $runMetaPath -RunMeta $runMeta -Update | Out-Null
+
+    Write-ConsoleSummary -ShowStatus -ShowIdentity:($null -ne $recmdPath)
+    Write-ConsoleLine -Segment @(("{0} processed, {1} completed, {2} completed with errors, {3} failed, {4} skipped, in {5}." -f
+            $batch.Processed, $batch.Completed, $batch.CompletedWithErrors, $batch.Failed, $batch.Skipped,
+            (Format-ConsoleDuration -Seconds $runWatch.Elapsed.TotalSeconds)))
+    if ($null -eq $rollupRecord.Error) {
+        Write-ConsoleLine -Segment @('Triage dashboard     ', $rollupRecord.Dashboard)
+    }
+    else {
+        Write-ConsoleLine -Segment @('Triage dashboard     could not be built, see the warning above')
+    }
+    if ($null -ne $identityRecord) {
+        if ($null -eq $identityRecord.Error) {
+            Write-ConsoleLine -Segment @('Identity dashboard   ', $identityRecord.Dashboard)
+        }
+        else {
+            Write-ConsoleLine -Segment @('Identity dashboard   could not be built, see the warning above')
+        }
+    }
+    $runLog = Get-ConsoleRunLogPath
+    if ($null -ne $runLog) {
+        Write-ConsoleLine -Segment @('Run log              ', $runLog)
+    }
+
+    if ($PassThru) {
+        [pscustomobject]@{
+            RunId        = $runId
+            ManifestPath = $manifestPath
+            RunMetaPath  = $runMetaPath
+            RunLogPath   = $runLog
+            Summary      = $batch
+            Rollup       = $rollupRecord
+            Identity     = $identityRecord
+            Collections  = $collections
+        }
     }
 }
-
-[pscustomobject]@{
-    RunId        = $runId
-    ManifestPath = $manifestPath
-    RunMetaPath  = $runMetaPath
-    Summary      = $batch
-    Rollup       = $rollupRecord
-    Identity     = $identityRecord
-    Collections  = $collections
+catch {
+    # A run that stops on an error says why in its log too.
+    Write-ConsoleLogLine -Text "ERROR $($_.Exception.Message)"
+    throw
+}
+finally {
+    Complete-ConsoleProgress
+    Close-ConsoleRunLog
 }

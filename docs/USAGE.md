@@ -11,7 +11,7 @@ The tool has been run against real Hayabusa <!--tested-version-->4.3.1<!--/teste
 
 ## Parameters
 
-The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts, ConfigPath and IdentityOnly. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
+The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts, ConfigPath, IdentityOnly and PassThru. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
 
 | Parameter | What it does |
 |---|---|
@@ -24,13 +24,14 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 | `-KeepArtifacts` | Keep extracted ZIPs and differencing disks after each host, for debugging |
 | `-ConfigPath` | Engagement config file, see below |
 | `-IdentityOnly` | Read [host identity](#identity-only) with RECmd and nothing else. Needs `RECmdPath` in the config, and takes no `-HayabusaPath` |
+| `-PassThru` | Return an object describing the run, for scripting. Without it nothing is returned. See [Quiet mode and -PassThru](#quiet-mode-and--passthru) |
 | `-Help` | Print a usage summary and exit. `-h` is the same |
 
 `-MinLevel` takes any of the six levels, informational, low, medium (the default), high, critical or emergency, and means that level and up.
 
 A rerun skips hosts that already finished, whatever the settings. On a case that's already been run, add `-Force` so a new floor or config applies to those hosts too.
 
-Add `-Verbose` for more detail as the run goes. `-InformationAction SilentlyContinue` hides the progress lines and leaves only warnings. `.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary, PowerShell's own `-?` shows the syntax, and `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
+Add `-Verbose` for more detail as the run goes, and see [Reading the console](#reading-the-console) for what each line means. `-InformationAction SilentlyContinue` hides the console lines and leaves only the warnings, and the [run log](#the-run-log) is still written. `.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary, PowerShell's own `-?` shows the syntax, and `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
 
 ### Examples
 
@@ -58,6 +59,61 @@ Each of these is a complete command. Copy one and change the paths:
 # Who, what and where only: host identity from the registry, no Hayabusa. The config sets RECmdPath.
 .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -ConfigPath D:\Cases\Case01\engagement.psd1 -IdentityOnly
 ```
+
+## Reading the console
+
+A run starts with a short header giving the version and the mode, and where it reads from and writes to, with the collections counted by type. A full run also shows the Hayabusa version and rules it uses, and RECmd's path when host identity is read. A long path is shortened in the middle, so its file name always shows.
+
+`Before the run` only appears when there's something to say before the first host starts, such as a ZIP the tool can't extract or a Hayabusa version it wasn't tested with. A line starting with `!` is a warning. When the run holds disk images it also says how many will be hashed, since each one is read in full twice.
+
+Each host then gets a block of its own. Its header line is written as soon as it starts, with its type and, for an image, its size, so whatever happens to the host lands under its name:
+
+```
+[3/5] 2026-10-11T072226_RW-Test-VHD  VHD, 4.1 GB
+      Hash before mount     done                           38s
+      Mount                 done                            4s
+      Read identity         Complete, RW-LENOVO            12s
+      Hayabusa              12 detections                2m10s
+      Teardown              done                            3s
+      Hash after teardown   unchanged                      37s
+      Completed in 3m44s
+```
+
+Each step gets a line when it finishes, with its result and how long it took, and a step that fails says `failed` with a short reason. A warning about the host shows inside its block, above the closing line, which gives the host's status and its total time. A folder has nothing to extract or mount, so a block only shows the steps that host really had. A host that's already finished gets a single line saying it was skipped.
+
+While a step runs, PowerShell's progress bars show which host and step the run is on. A hash shows how much of the image it has read, and Hayabusa shows how long it's been running and the last line it printed. `$ProgressPreference = 'SilentlyContinue'` turns the bars off.
+
+The run ends with a summary table, one row per collection in the run, then the counts with the total time, and where to find each dashboard and the run log. A long collection name is shortened in the middle to keep the table inside the window.
+
+Status words are coloured:
+
+| Colour | Status |
+|---|---|
+| Green | Complete, Completed |
+| Yellow | Partial, CompletedWithErrors, NoRegistryHives |
+| Red | Failed, and a hash that changed |
+| Dark grey | skipped |
+
+Colour is off when the `NO_COLOR` environment variable is set, or when the output is redirected. With colour on, a coloured line reaches `-InformationVariable` in pieces, so set `NO_COLOR` or read the run log when you need whole lines.
+
+Computer names, user names, network names and Hayabusa's own output all come from the evidence, so whoever built that evidence chose them, and a crafted hostname could carry escape codes that move the cursor or rewrite what's already on screen. Every value goes through one sanitiser before it reaches the console, a progress bar or the run log. It strips escape sequences and every other control character, along with the Unicode overrides that reverse the direction of text, and it turns line breaks into spaces and cuts anything very long short.
+
+## The run log
+
+Every run writes the same lines to `_runs\run_<time>_<RunId>.log`, with the same time and RunId as its run-meta, so the two sit side by side. Each line starts with the time in UTC, and the warnings go in too, each starting with `WARNING`. It's plain UTF-8 text with no colour or progress bars, written line by line so you can follow it with `Get-Content -Wait`, even in quiet mode. An `-IdentityOnly` run writes one as well, under a RunId of its own, though it has no run-meta. If the log can't be written, for example because `_runs` is a link, the run warns once and carries on without it.
+
+## Quiet mode and -PassThru
+
+`-InformationAction SilentlyContinue` hides every console line and leaves only the warnings, and the run log is still written in full.
+
+The script returns nothing unless you add `-PassThru`, so a run ends with its summary and not a dump of an object. With `-PassThru` it returns the same object it always used to, now with `RunLogPath` added, for scripting against:
+
+```powershell
+$run = .\Invoke-BulkHayabusa.ps1 -InputRoot D:\Cases\Case01\KAPE -OutputRoot D:\Cases\Case01\Output -HayabusaPath D:\Tools\hayabusa\hayabusa.exe -InformationAction SilentlyContinue -PassThru
+if ($run.Summary.Failed -gt 0) { Get-Content -LiteralPath $run.RunLogPath }
+```
+
+`Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists what it holds.
 
 ## Lay out each case the same way
 
@@ -124,7 +180,7 @@ The differencing disk is created with diskpart, which can't reliably read non-AS
 
 For how the mount keeps the evidence read-only, see [Evidence integrity](../README.md#evidence-integrity) in the README.
 
-Each disk image is hashed with SHA-256 before it's mounted and again after teardown, to show it wasn't changed. Each hash reads the whole image, so expect a pause before and after a large one: the run says how many images it will hash when it starts, and prints a line with the image's size before each one. A ZIP holding a disk image is hashed as the extracted image. Loose folders aren't hashed.
+Each disk image is hashed with SHA-256 before it's mounted and again after teardown, to show it wasn't changed. Each hash reads the whole image, so expect a pause before and after a large one. The run says how many images it will hash before it starts, each host's header gives its image's size, and a progress bar shows how much of the image each hash has read. A ZIP holding a disk image is hashed as the extracted image. Loose folders aren't hashed.
 
 ## Outputs
 
@@ -136,6 +192,7 @@ Everything lands under OutputRoot:
 | `<Collection>\<Collection>_timeline.csv` | Hayabusa's CSV timeline, UTC |
 | `<Collection>\<Collection>_hayabusa.log` | The exact arguments, Hayabusa's output and its exit code |
 | `run_manifest.csv` | One row per collection with its latest status, counts, warnings and errors |
+| `_runs\run_<time>_<RunId>.log` | The run's console lines as plain text, timestamped in UTC, warnings included. See [The run log](#the-run-log) |
 | `_runs\run_meta_<time>_<RunId>.json` | What each run used: Hayabusa and rules versions, settings and where each came from, config hash, ZIP limits, collections, summary, and each disk image's SHA-256 before and after its host. See [Run-meta](#run-meta) |
 | `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
@@ -157,14 +214,14 @@ Some folders under OutputRoot belong to the tool:
 
 | Folder | What it's for |
 |---|---|
-| `_runs` | One provenance record per run, written when the run starts, updated as each host finishes and completed when it ends, and never overwritten by a later run. Together they show what every row in the manifest was produced with |
+| `_runs` | One provenance record and one run log per run. The record is written when the run starts, updated as each host finishes and completed when it ends, and neither is overwritten by a later run. Together they show what every row in the manifest was produced with |
 | `_diff` | The differencing disks a disk image is mounted through. Each one is deleted when its host finishes, unless `-KeepArtifacts` is given, so after a clean run without it this folder is empty. Anything left in it means a teardown didn't finish, and the run's warnings will say which |
 | `_work` | Extracted ZIPs, deleted after each host unless `-KeepArtifacts` is given |
 | `_mnt` | Empty folders a volume is attached to when Windows gives it no drive letter |
 
 ### Run-meta
 
-Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. Under `Collections` it lists every collection the run found, with these fields:
+Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. `RunLog` is the path of the run's log, null if it couldn't be written. `SchemaVersion` is 8. Under `Collections` it lists every collection the run found, with these fields:
 
 | Field | What it holds |
 |---|---|
