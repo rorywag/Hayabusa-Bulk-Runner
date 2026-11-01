@@ -233,20 +233,48 @@ function New-FakeHost {
     return $d
 }
 
+function Restore-TestEnvironmentVariable {
+    <#
+    Puts an environment variable back to a value saved earlier with
+    [System.Environment]::GetEnvironmentVariable, removing it when that was
+    $null. Passing $null to SetEnvironmentVariable from PowerShell turns it
+    into an empty string, and some .NET versions keep the variable set and
+    empty, so it's removed here through the Env: drive instead. Value is
+    left untyped on purpose, since a [string] parameter would turn $null
+    into an empty string too.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidatePattern('^[A-Za-z_][A-Za-z0-9_]*$')][string]$Name,
+        [AllowNull()]$Value
+    )
+    $path = "Env:\$Name"
+    if ($null -eq $Value) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path
+        }
+    }
+    else {
+        Set-Item -LiteralPath $path -Value ([string]$Value)
+    }
+}
+
 function Enter-TestPlainConsole {
     <#
-    Sets NO_COLOR for runs of the entry script, which works out colour for
-    itself, so its lines are one information record each. Exit-TestPlainConsole
-    puts back whatever was there before. Call the pair from BeforeAll and
-    AfterAll.
+    Sets NO_COLOR and COLUMNS for runs of the entry script, which works out
+    colour and width for itself, so its lines are one information record
+    each and lay out at 120 columns on any machine and terminal.
+    Exit-TestPlainConsole puts back whatever was there before. Call the
+    pair from BeforeAll and AfterAll.
     #>
     $script:SavedNoColor = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
-    [System.Environment]::SetEnvironmentVariable('NO_COLOR', '1')
+    $script:SavedColumns = [System.Environment]::GetEnvironmentVariable('COLUMNS')
+    $env:NO_COLOR = '1'
+    $env:COLUMNS = '120'
 }
 
 function Exit-TestPlainConsole {
-    # Setting it to null removes it, when it wasn't set before.
-    [System.Environment]::SetEnvironmentVariable('NO_COLOR', $script:SavedNoColor)
+    Restore-TestEnvironmentVariable -Name 'NO_COLOR' -Value $script:SavedNoColor
+    Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $script:SavedColumns
 }
 
 function Get-TestEnvironment {

@@ -131,6 +131,73 @@ Describe 'Colour' {
     }
 }
 
+Describe 'Console width' {
+    BeforeAll {
+        $script:savedColumns = [System.Environment]::GetEnvironmentVariable('COLUMNS')
+    }
+    AfterAll {
+        Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $savedColumns
+    }
+    BeforeEach {
+        Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $null
+        Mock Test-ConsoleRedirected { $false }
+        Mock Get-ConsoleWindowWidth { 100 }
+    }
+
+    It 'uses COLUMNS when it is a whole number, ahead of a redirect and the window' {
+        Mock Test-ConsoleRedirected { $true }
+        $env:COLUMNS = '90'
+        Get-ConsoleWidth | Should -Be 90
+        $env:COLUMNS = '0120'
+        Get-ConsoleWidth | Should -Be 120
+    }
+
+    It 'clamps a COLUMNS of <Columns> to <Want>' -ForEach @(
+        @{ Columns = '10'; Want = 60 }
+        @{ Columns = '0'; Want = 60 }
+        @{ Columns = '9999'; Want = 500 }
+        @{ Columns = '2147483647'; Want = 500 }
+    ) {
+        $env:COLUMNS = $Columns
+        Get-ConsoleWidth | Should -Be $Want
+    }
+
+    It 'ignores a COLUMNS of <Name> and works the width out as if it were unset' -ForEach @(
+        @{ Name = 'letters'; Columns = 'wide' }
+        @{ Name = 'a negative number'; Columns = '-80' }
+        @{ Name = 'a plus sign'; Columns = '+80' }
+        @{ Name = 'a decimal'; Columns = '80.5' }
+        @{ Name = 'spaces around it'; Columns = ' 80 ' }
+        @{ Name = 'a thousands separator'; Columns = '1,000' }
+        @{ Name = 'a number too big for an int'; Columns = '99999999999' }
+        @{ Name = 'digits from another script'; Columns = "$([char]0x0668)$([char]0x0660)" }
+        @{ Name = 'an escape sequence'; Columns = "80$([char]27)[2J" }
+    ) {
+        $env:COLUMNS = $Columns
+        Get-ConsoleWidth | Should -Be 100 -Because 'the window is used when output is not redirected'
+        Mock Test-ConsoleRedirected { $true }
+        Get-ConsoleWidth | Should -Be 120 -Because 'redirected output gets the fallback'
+    }
+
+    It 'gives redirected output the 120 fallback, whatever the window says' {
+        Mock Test-ConsoleRedirected { $true }
+        Mock Get-ConsoleWindowWidth { 200 }
+        Get-ConsoleWidth | Should -Be 120
+        Should -Invoke Get-ConsoleWindowWidth -Times 0 -Exactly
+    }
+
+    It 'uses the window width on a console, no narrower than 60' {
+        Get-ConsoleWidth | Should -Be 100
+        Mock Get-ConsoleWindowWidth { 40 }
+        Get-ConsoleWidth | Should -Be 60
+    }
+
+    It 'falls back to 120 when the window width cannot be read' {
+        Mock Get-ConsoleWindowWidth { 0 }
+        Get-ConsoleWidth | Should -Be 120
+    }
+}
+
 Describe 'Formatting' {
     It 'formats <Seconds> seconds as <Want>' -ForEach @(
         @{ Seconds = 0; Want = '0s' }, @{ Seconds = 0.4; Want = '0s' }, @{ Seconds = 38; Want = '38s' }, @{ Seconds = 59.6; Want = '1m00s' }
@@ -360,23 +427,47 @@ Describe 'The test setup' {
         ($after -join "`n") | Should -BeExactly ($before -join "`n")
     }
 
-    It 'puts NO_COLOR back the way it was after a run of the entry script, set or not' {
-        $saved = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
+    It 'puts NO_COLOR and COLUMNS back the way they were after a run of the entry script, set or not' {
+        $savedNoColor = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
+        $savedColumns = [System.Environment]::GetEnvironmentVariable('COLUMNS')
         try {
-            [System.Environment]::SetEnvironmentVariable('NO_COLOR', $null)
+            Restore-TestEnvironmentVariable -Name 'NO_COLOR' -Value $null
+            Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $null
             Enter-TestPlainConsole
             $env:NO_COLOR | Should -BeExactly '1'
+            $env:COLUMNS | Should -BeExactly '120'
             Exit-TestPlainConsole
-            [System.Environment]::GetEnvironmentVariable('NO_COLOR') | Should -BeNullOrEmpty
-            Test-Path -LiteralPath 'Env:\NO_COLOR' | Should -BeFalse
+            foreach ($name in 'NO_COLOR', 'COLUMNS') {
+                Test-Path -LiteralPath "Env:\$name" | Should -BeFalse -Because "$name wasn't set before, so it mustn't be left set, even empty"
+                $null -eq [System.Environment]::GetEnvironmentVariable($name) | Should -BeTrue
+                @([System.Environment]::GetEnvironmentVariables().Keys) | Should -Not -Contain $name
+            }
 
-            [System.Environment]::SetEnvironmentVariable('NO_COLOR', 'mine')
+            $env:NO_COLOR = 'mine'
+            $env:COLUMNS = '80'
             Enter-TestPlainConsole
             Exit-TestPlainConsole
-            [System.Environment]::GetEnvironmentVariable('NO_COLOR') | Should -BeExactly 'mine'
+            $env:NO_COLOR | Should -BeExactly 'mine'
+            $env:COLUMNS | Should -BeExactly '80'
         }
         finally {
-            [System.Environment]::SetEnvironmentVariable('NO_COLOR', $saved)
+            Restore-TestEnvironmentVariable -Name 'NO_COLOR' -Value $savedNoColor
+            Restore-TestEnvironmentVariable -Name 'COLUMNS' -Value $savedColumns
+        }
+    }
+
+    It 'removes a variable that was not set when it restores it, and sets one that was' {
+        $saved = [System.Environment]::GetEnvironmentVariable('HBR_TEST_RESTORE')
+        try {
+            $env:HBR_TEST_RESTORE = 'x'
+            Restore-TestEnvironmentVariable -Name 'HBR_TEST_RESTORE' -Value $null
+            Test-Path -LiteralPath 'Env:\HBR_TEST_RESTORE' | Should -BeFalse
+            { Restore-TestEnvironmentVariable -Name 'HBR_TEST_RESTORE' -Value $null } | Should -Not -Throw -Because 'removing one that is already gone is fine'
+            Restore-TestEnvironmentVariable -Name 'HBR_TEST_RESTORE' -Value 'back'
+            $env:HBR_TEST_RESTORE | Should -BeExactly 'back'
+        }
+        finally {
+            Restore-TestEnvironmentVariable -Name 'HBR_TEST_RESTORE' -Value $saved
         }
     }
 }

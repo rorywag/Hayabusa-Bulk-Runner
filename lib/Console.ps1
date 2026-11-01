@@ -19,9 +19,11 @@
 $script:ConsoleValueMaxLength = 200
 $script:ConsoleLineMaxLength = 4000
 
-# Fallback when the console width can't be read, and the narrowest layout.
+# Fallback when the console width can't be read, and the narrowest and
+# widest layout COLUMNS can ask for.
 $script:ConsoleDefaultWidth = 120
 $script:ConsoleMinimumWidth = 60
+$script:ConsoleMaximumWidth = 500
 
 # Progress bars are redrawn at most this often.
 $script:ConsoleProgressIntervalMs = 250
@@ -146,19 +148,46 @@ function Test-ConsoleRedirected {
     }
 }
 
-function Get-ConsoleWidth {
-    # The console's width, or the fallback when it can't be read.
+function Get-ConsoleWindowWidth {
+    # The window's width as the host reports it, or 0 when it can't be read.
     [CmdletBinding()]
     [OutputType([int])]
     param()
 
-    $width = 0
     try {
-        $width = [int]$Host.UI.RawUI.WindowSize.Width
+        return [int]$Host.UI.RawUI.WindowSize.Width
     }
     catch {
-        $width = 0
+        return 0
     }
+}
+
+function Get-ConsoleWidth {
+    <#
+    .SYNOPSIS
+        The width the layout is drawn to.
+    .DESCRIPTION
+        COLUMNS wins when it's set to a whole number, kept between 60 and
+        500. It comes from the environment, so anything else in it, such as
+        a sign or a space or a number too big to read, is ignored and the
+        width is worked out as if it weren't set. Then redirected output
+        gets the 120 fallback, since the window's width means nothing in a
+        file or a pipe, and otherwise it's the window's width, or the
+        fallback when that can't be read.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param()
+
+    $raw = [System.Environment]::GetEnvironmentVariable('COLUMNS')
+    $columns = 0
+    if (-not [string]::IsNullOrEmpty($raw) -and [int]::TryParse($raw, [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$columns)) {
+        return [math]::Min($script:ConsoleMaximumWidth, [math]::Max($script:ConsoleMinimumWidth, $columns))
+    }
+    if (Test-ConsoleRedirected) {
+        return $script:ConsoleDefaultWidth
+    }
+    $width = Get-ConsoleWindowWidth
     if ($width -le 0) {
         return $script:ConsoleDefaultWidth
     }

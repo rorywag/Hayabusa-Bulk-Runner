@@ -85,6 +85,8 @@ While a step runs, PowerShell's progress bars show which host and step the run i
 
 The run ends with a summary table, one row per collection in the run, then the counts with the total time, and where to find each dashboard and the run log. A long collection name is shortened in the middle to keep the table inside the window.
 
+The layout fits the window's width, or 120 columns when the output goes to a file or a pipe, and setting the `COLUMNS` environment variable to a whole number between 60 and 500 lets you pick the width yourself.
+
 Status words are coloured:
 
 | Colour | Status |

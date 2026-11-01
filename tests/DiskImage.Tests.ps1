@@ -62,12 +62,12 @@ Describe 'diskpart script' {
         Get-ThrownMessage { Get-DifferencingChildScript -ParentPath 'D:\a"b.vhdx' -ChildPath 'D:\c.vhdx' } | Should -BeLike '*double quote*'
     }
     It 'calls diskpart by full path under SystemRoot' {
-        $saved = $env:SystemRoot
+        $saved = [System.Environment]::GetEnvironmentVariable('SystemRoot')
         try {
             $env:SystemRoot = 'C:\Windows'
             Get-DiskpartPath | Should -Be ([System.IO.Path]::Combine('C:\Windows', 'System32', 'diskpart.exe'))
         }
-        finally { $env:SystemRoot = $saved }
+        finally { Restore-TestEnvironmentVariable -Name 'SystemRoot' -Value $saved }
     }
 }
 
