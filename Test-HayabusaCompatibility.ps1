@@ -57,7 +57,7 @@
     read or written.
 
 .EXAMPLE
-    .\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.2.0\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.2.0\rules
+    .\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.3.1\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.3.1\rules
 
 .EXAMPLE
     .\Test-HayabusaCompatibility.ps1 -Help
@@ -102,7 +102,7 @@ if ($Help) {
         'Prints PASS or FAIL per check. Exits 0 when everything passes, 1 otherwise.'
         ''
         'Example:'
-        '  .\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.2.0\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.2.0\rules'
+        '  .\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.3.1\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.3.1\rules'
         ''
         'For the complete help: Get-Help .\Test-HayabusaCompatibility.ps1 -Full'
     )
