@@ -25,7 +25,7 @@ The dashboard after a run over eight hosts, with the severity floor at medium:
 
 The console during the same run:
 
-![Console output of a run: a warning for a ZIP the tool can't extract, one progress line per host and the end-of-run summary](docs/images/console.png)
+![Console output of a run, starting with a header and a Before the run block that flags a ZIP the tool can't extract, then a block per host with a line for each step and its time, and ending with the summary table and where the dashboards and run log are](docs/images/console.png)
 
 The host identity dashboard, over a six-host domain, with one workstation's other interfaces and its built-in and system accounts unfolded:
 
