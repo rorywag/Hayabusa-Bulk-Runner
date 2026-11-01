@@ -14,19 +14,20 @@ $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-Hayab
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
 $script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
-# Console lines come out in colour only on a terminal. With NO_COLOR set
-# each line is one information record wherever the tests run, so the
-# assertions on them hold. tests\Console.Tests.ps1 covers colour itself.
-$env:NO_COLOR = '1'
-
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
 
+# Console lines come out in colour only on a terminal. With colour off each
+# line is one information record wherever the tests run, so the assertions
+# on them hold. tests\Console.Tests.ps1 covers colour itself. Nothing here
+# touches the environment, so the analyst's shell is left as it was.
+Initialize-ConsoleOutput -Color $false
+
 # The fake Hayabusa reports the tested version in its help banner, so the
 # version notice is tested against whatever lib/Hayabusa.ps1 says. It runs
-# as its own process, so the version reaches it through the environment.
-$env:FAKE_HAYABUSA_VERSION = $script:TestedHayabusaVersion
+# as its own process, so New-FakeHayabusa writes the version into its
+# launcher.
 $script:FakeVersionLine = "Hayabusa v$($script:TestedHayabusaVersion) - Autumn Release"
 # A version that is never the tested one, the next minor release, for the
 # tests of what happens when the versions differ.
@@ -197,6 +198,8 @@ function New-FakeHayabusa {
         $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa.cmd'
         Write-TestText -Path $launcher -Line @(
             '@echo off'
+            'setlocal'
+            "set `"FAKE_HAYABUSA_VERSION=$script:TestedHayabusaVersion`""
             "`"$hostExe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script:FakeHayabusaScript`" %*"
             'exit /b %ERRORLEVEL%'
         ) | Out-Null
@@ -205,6 +208,8 @@ function New-FakeHayabusa {
         $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa'
         Write-TestText -Path $launcher -Line @(
             '#!/bin/sh'
+            "FAKE_HAYABUSA_VERSION='$script:TestedHayabusaVersion'"
+            'export FAKE_HAYABUSA_VERSION'
             "exec `"$hostExe`" -NoProfile -NonInteractive -File `"$script:FakeHayabusaScript`" `"`$@`""
         ) | Out-Null
         & chmod +x $launcher
@@ -226,6 +231,30 @@ function New-FakeHost {
         Write-TestText -Path (Join-Path -Path $d -ChildPath $k) -Line ([string[]]$Files[$k]) | Out-Null
     }
     return $d
+}
+
+function Enter-TestPlainConsole {
+    <#
+    Sets NO_COLOR for runs of the entry script, which works out colour for
+    itself, so its lines are one information record each. Exit-TestPlainConsole
+    puts back whatever was there before. Call the pair from BeforeAll and
+    AfterAll.
+    #>
+    $script:SavedNoColor = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
+    [System.Environment]::SetEnvironmentVariable('NO_COLOR', '1')
+}
+
+function Exit-TestPlainConsole {
+    # Setting it to null removes it, when it wasn't set before.
+    [System.Environment]::SetEnvironmentVariable('NO_COLOR', $script:SavedNoColor)
+}
+
+function Get-TestEnvironment {
+    # Every environment variable as sorted NAME=value lines, for comparing.
+    $lines = foreach ($e in [System.Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        '{0}={1}' -f $e.Key, $e.Value
+    }
+    return , [string[]]@($lines | Sort-Object -CaseSensitive)
 }
 
 function Get-TestToolVersion {

@@ -255,56 +255,69 @@ if (Test-ConsoleInformationShown) {
 }
 $settingWarnings = $null
 $discoveryWarnings = $null
+$heldWarningsShown = $early.Count -eq 0
 
-if ($IdentityOnly) {
-    # Only the ZIP limits apply. Hayabusa and its settings aren't used.
-    $limits = Resolve-ZipLimit -Config $config
-}
-else {
-    $commandLine = @{}
-    if ($PSBoundParameters.ContainsKey('MinLevel')) {
-        $commandLine['MinLevel'] = $MinLevel
+# Everything up to the header can stop the run, and the warnings held back
+# for Before the run would be lost with it, so on a stop they're written as
+# warnings before the error goes on unchanged.
+try {
+    if ($IdentityOnly) {
+        # Only the ZIP limits apply. Hayabusa and its settings aren't used.
+        $limits = Resolve-ZipLimit -Config $config
+    }
+    else {
+        $commandLine = @{}
+        if ($PSBoundParameters.ContainsKey('MinLevel')) {
+            $commandLine['MinLevel'] = $MinLevel
+        }
+
+        $resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath -WarningVariable settingWarnings @early
     }
 
-    $resolved = Resolve-RunSetting -CommandLine $commandLine -Config $config -HayabusaPath $HayabusaPath -WarningVariable settingWarnings @early
-}
-
-$threadsValue = $null
-if ($PSBoundParameters.ContainsKey('Threads')) {
-    $threadsValue = $Threads
-}
-
-# Discovery reads InputRoot and lists ZIP entries. Nothing is extracted,
-# mounted or written until the checks below pass.
-$collections = @(Get-InputCollection -InputRoot $InputRoot -WarningVariable discoveryWarnings @early)
-Assert-UniqueCollectionName -Collections $collections
-Assert-CollectionNameAllowed -Collections $collections
-Write-Verbose "Discovered $($collections.Count) collection(s)."
-
-# Fail before anything is written if disk images need an elevated session.
-Assert-ElevationForContainer -Collections $collections
-
-$hayabusaVersion = $null
-$rulesVersion = $null
-if (-not $IdentityOnly) {
-    if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
-        throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
+    $threadsValue = $null
+    if ($PSBoundParameters.ContainsKey('Threads')) {
+        $threadsValue = $Threads
     }
-    # Provenance for run-meta. A failed version read is recorded, not fatal.
-    $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
-    $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
-    Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
-}
 
-# Run setup. From here on the run has an id and a log.
-if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
-    New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
-    Write-Verbose "Created OutputRoot: $OutputRoot"
+    # Discovery reads InputRoot and lists ZIP entries. Nothing is extracted,
+    # mounted or written until the checks below pass.
+    $collections = @(Get-InputCollection -InputRoot $InputRoot -WarningVariable discoveryWarnings @early)
+    Assert-UniqueCollectionName -Collections $collections
+    Assert-CollectionNameAllowed -Collections $collections
+    Write-Verbose "Discovered $($collections.Count) collection(s)."
+
+    # Fail before anything is written if disk images need an elevated session.
+    Assert-ElevationForContainer -Collections $collections
+
+    $hayabusaVersion = $null
+    $rulesVersion = $null
+    if (-not $IdentityOnly) {
+        if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
+            throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
+        }
+        # Provenance for run-meta. A failed version read is recorded, not fatal.
+        $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
+        $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
+        Write-Verbose "Hayabusa: $($hayabusaVersion.Version). Rules: $($rulesVersion.Summary)."
+    }
+
+    # Run setup. From here on the run has an id and a log.
+    if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+        Write-Verbose "Created OutputRoot: $OutputRoot"
+    }
+    $runId = [guid]::NewGuid().ToString()
+    $startedUtc = (Get-Date).ToUniversalTime()
+    Open-ConsoleRunLog -Path (Get-RunLogPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId)
+    Write-Verbose "RunId $runId"
 }
-$runId = [guid]::NewGuid().ToString()
-$startedUtc = (Get-Date).ToUniversalTime()
-Open-ConsoleRunLog -Path (Get-RunLogPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId)
-Write-Verbose "RunId $runId"
+catch {
+    if (-not $heldWarningsShown) {
+        $heldWarningsShown = $true
+        Write-HeldWarning -Record (@($settingWarnings) + @($discoveryWarnings))
+    }
+    throw
+}
 
 try {
     # Header
@@ -356,6 +369,7 @@ try {
         foreach ($w in $earlyWarnings) {
             Write-ConsoleNotice -Warning $w -Recorded
         }
+        $heldWarningsShown = $true
         foreach ($n in $notices) {
             Write-ConsoleNotice -Warning $n
         }
@@ -550,7 +564,12 @@ try {
     }
 }
 catch {
-    # A run that stops on an error says why in its log too.
+    # A run that stops on an error says why in its log too, and any warning
+    # held back for Before the run is written first.
+    if (-not $heldWarningsShown) {
+        $heldWarningsShown = $true
+        Write-HeldWarning -Record (@($settingWarnings) + @($discoveryWarnings))
+    }
     Write-ConsoleLogLine -Text "ERROR $($_.Exception.Message)"
     throw
 }

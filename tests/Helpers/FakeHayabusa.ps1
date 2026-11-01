@@ -31,7 +31,7 @@ if ($argv.Count -gt 0 -and $argv[0] -eq '--version') {
 
 if ($argv.Count -gt 0 -and $argv[0] -eq 'help') {
     if ([string]::IsNullOrEmpty($env:FAKE_HAYABUSA_VERSION)) {
-        [Console]::Error.WriteLine('FAKE_HAYABUSA_VERSION is not set. Dot-source tests/Helpers/TestHelpers.ps1 first.')
+        [Console]::Error.WriteLine('FAKE_HAYABUSA_VERSION is not set. Run the fake through the launcher New-FakeHayabusa makes.')
         exit 3
     }
     $banner = "Hayabusa v$($env:FAKE_HAYABUSA_VERSION) - Autumn Release"

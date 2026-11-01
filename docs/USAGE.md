@@ -64,7 +64,7 @@ Each of these is a complete command. Copy one and change the paths:
 
 A run starts with a short header giving the version and the mode, and where it reads from and writes to, with the collections counted by type. A full run also shows the Hayabusa version and rules it uses, and RECmd's path when host identity is read. A long path is shortened in the middle, so its file name always shows.
 
-`Before the run` only appears when there's something to say before the first host starts, such as a ZIP the tool can't extract or a Hayabusa version it wasn't tested with. A line starting with `!` is a warning. When the run holds disk images it also says how many will be hashed, since each one is read in full twice.
+`Before the run` only appears when there's something to say before the first host starts, such as a ZIP the tool can't extract or a Hayabusa version it wasn't tested with. A line starting with `!` is a warning, and if the run stops on an error before it gets that far, the warnings it had so far are written as ordinary warnings just ahead of the error, so none are lost. When the run holds disk images it also says how many will be hashed, since each one is read in full twice.
 
 Each host then gets a block of its own. Its header line is written as soon as it starts, with its type and, for an image, its size, so whatever happens to the host lands under its name:
 
@@ -96,7 +96,7 @@ Status words are coloured:
 
 Colour is off when the `NO_COLOR` environment variable is set, or when the output is redirected. With colour on, a coloured line reaches `-InformationVariable` in pieces, so set `NO_COLOR` or read the run log when you need whole lines.
 
-Computer names, user names, network names and Hayabusa's own output all come from the evidence, so whoever built that evidence chose them, and a crafted hostname could carry escape codes that move the cursor or rewrite what's already on screen. Every value goes through one sanitiser before it reaches the console, a progress bar or the run log. It strips escape sequences and every other control character, along with the Unicode overrides that reverse the direction of text, and it turns line breaks into spaces and cuts anything very long short.
+Computer names, user names, network names and Hayabusa's own output all come from the evidence, so whoever built that evidence chose them, and a crafted hostname could carry escape codes that move the cursor or rewrite what's already on screen. Every value goes through one sanitiser before it reaches the console, a progress bar or the run log. It strips escape sequences and every other control character, along with every Unicode format character, which takes out the overrides that reverse the direction of text and the invisible ones like a zero-width space hidden inside a computer name, and it turns line breaks into spaces and cuts anything very long short.
 
 ## The run log
 

@@ -37,6 +37,13 @@ Describe 'ConvertTo-ConsoleText' {
         @{ Name = 'a C1 string sequence, such as APC'; Text = "A$([char]0x9F)hidden$([char]0x9C)B"; Want = 'AB' }
         @{ Name = 'bidi overrides'; Text = "A$([char]0x202E)exe.txt$([char]0x202C)B"; Want = 'Aexe.txtB' }
         @{ Name = 'bidi embeddings and isolates'; Text = "$([char]0x202A)$([char]0x202B)$([char]0x202D)A$([char]0x2066)$([char]0x2067)$([char]0x2068)$([char]0x2069)B"; Want = 'AB' }
+        @{ Name = 'a zero-width space inside a name'; Text = "WS$([char]0x200B)01"; Want = 'WS01' }
+        @{ Name = 'a right-to-left mark inside a name'; Text = "WS$([char]0x200F)01"; Want = 'WS01' }
+        @{ Name = 'an Arabic letter mark inside a name'; Text = "WS$([char]0x061C)01"; Want = 'WS01' }
+        @{ Name = 'a byte order mark inside a name'; Text = "WS$([char]0xFEFF)01"; Want = 'WS01' }
+        @{ Name = 'the other zero-width and direction marks'; Text = "W$([char]0x200C)$([char]0x200D)$([char]0x200E)S$([char]0x2060)01"; Want = 'WS01' }
+        @{ Name = 'a soft hyphen'; Text = "WS$([char]0x00AD)01"; Want = 'WS01' }
+        @{ Name = 'tag characters, outside the Basic Multilingual Plane'; Text = "WS$([char]::ConvertFromUtf32(0xE0041))$([char]::ConvertFromUtf32(0xE007F))01"; Want = 'WS01' }
     ) {
         ConvertTo-ConsoleText -Text $Text | Should -BeExactly $Want
     }
@@ -54,6 +61,8 @@ Describe 'ConvertTo-ConsoleText' {
 
     It 'leaves plain text, including non-ASCII names, as it is' {
         ConvertTo-ConsoleText -Text "WS-01.corp.example D$([char]0x00FC)sseldorf" | Should -BeExactly "WS-01.corp.example D$([char]0x00FC)sseldorf"
+        $astral = "WS01 $([char]::ConvertFromUtf32(0x1F600)) $([char]::ConvertFromUtf32(0x20BB7))"
+        ConvertTo-ConsoleText -Text $astral | Should -BeExactly $astral -Because 'characters outside the Basic Multilingual Plane that are not format characters stay'
         ConvertTo-ConsoleText -Text $null | Should -BeExactly ''
     }
 }
@@ -68,9 +77,14 @@ Describe 'Colour' {
     }
 
     It 'follows NO_COLOR when the run starts' {
-        $env:NO_COLOR | Should -Not -BeNullOrEmpty -Because 'TestHelpers.ps1 sets it'
-        Initialize-ConsoleOutput
-        (Get-ConsoleState).Color | Should -BeFalse
+        Enter-TestPlainConsole
+        try {
+            Initialize-ConsoleOutput
+            (Get-ConsoleState).Color | Should -BeFalse
+        }
+        finally {
+            Exit-TestPlainConsole
+        }
     }
 
     It 'colours only the status word, piece by piece, when colour is on and lines are shown' {
@@ -256,6 +270,13 @@ Describe 'Run log' {
 }
 
 Describe 'Notices before the run' {
+    It 'writes held warnings sanitised, and passes over one that cannot be written' {
+        $hw = $null
+        Write-HeldWarning -Record @("A$esc[2JB$([char]0x200B)C", $null) -WarningVariable hw -WarningAction SilentlyContinue
+        @($hw | ForEach-Object { $_.Message }) | Should -BeExactly @('ABC')
+        { Write-HeldWarning -Record @('stopped') -WarningAction Stop 3>$null } | Should -Not -Throw
+    }
+
     It 'shows a short note and records the warning quietly when lines are on screen' {
         Initialize-ConsoleOutput -Color $false -Width 100
         $iv = $null
@@ -328,5 +349,34 @@ Describe 'Quiet mode' {
         $text = @(Get-Content -LiteralPath $log[0].FullName -Encoding UTF8 | ForEach-Object { $_.Substring(21) })
         $text | Should -Contain '[1/1] HOST01  folder'
         $text | Should -Contain 'Summary'
+    }
+}
+
+Describe 'The test setup' {
+    It 'leaves the environment as it found it when the helpers are loaded' {
+        $before = Get-TestEnvironment
+        & { . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1') }
+        $after = Get-TestEnvironment
+        ($after -join "`n") | Should -BeExactly ($before -join "`n")
+    }
+
+    It 'puts NO_COLOR back the way it was after a run of the entry script, set or not' {
+        $saved = [System.Environment]::GetEnvironmentVariable('NO_COLOR')
+        try {
+            [System.Environment]::SetEnvironmentVariable('NO_COLOR', $null)
+            Enter-TestPlainConsole
+            $env:NO_COLOR | Should -BeExactly '1'
+            Exit-TestPlainConsole
+            [System.Environment]::GetEnvironmentVariable('NO_COLOR') | Should -BeNullOrEmpty
+            Test-Path -LiteralPath 'Env:\NO_COLOR' | Should -BeFalse
+
+            [System.Environment]::SetEnvironmentVariable('NO_COLOR', 'mine')
+            Enter-TestPlainConsole
+            Exit-TestPlainConsole
+            [System.Environment]::GetEnvironmentVariable('NO_COLOR') | Should -BeExactly 'mine'
+        }
+        finally {
+            [System.Environment]::SetEnvironmentVariable('NO_COLOR', $saved)
+        }
     }
 }

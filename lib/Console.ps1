@@ -60,11 +60,15 @@ function ConvertTo-ConsoleText {
         Removes escape sequences whole, CSI and OSC along with the other
         string sequences, so a crafted name can't rewrite what's already on
         screen or set the window title. Then removes every C0 and C1
-        control character, DEL among them, along with the Unicode bidi
-        overrides and isolates, U+202A to U+202E and U+2066 to U+2069, which
-        could make text read in a different order than it's stored. Line
-        breaks and tabs become a space, and anything longer than MaxLength
-        is cut, ending in "...".
+        control character, DEL among them, along with every character in
+        the Unicode format category, Cf. That takes out the bidi overrides
+        and isolates, which could make text read in a different order than
+        it's stored, and the invisible ones such as the zero-width space
+        and the byte order mark, so a computer name with one hidden inside
+        can't pass for the real one. Format characters outside
+        the Basic Multilingual Plane, the tag characters among them, are
+        taken out too. Line breaks and tabs become a space, and anything
+        longer than MaxLength is cut, ending in "...".
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -88,7 +92,24 @@ function ConvertTo-ConsoleText {
     # Any other escape and the character after it.
     $s = [regex]::Replace($s, '\x1B[\x20-\x7E]?', '')
     $s = [regex]::Replace($s, '\r\n|[\r\n\t\v\f\u0085\u2028\u2029]', ' ')
-    $s = [regex]::Replace($s, '[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]', '')
+    $s = [regex]::Replace($s, '[\x00-\x1F\x7F-\x9F\p{Cf}]', '')
+    # The regex sees a character outside the Basic Multilingual Plane as two
+    # surrogates, so a format character there is found by its category.
+    if ($s -match '[\uD800-\uDBFF]') {
+        $kept = New-Object System.Text.StringBuilder $s.Length
+        for ($i = 0; $i -lt $s.Length; $i++) {
+            if ([char]::IsSurrogatePair($s, $i)) {
+                if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($s, $i) -ne [System.Globalization.UnicodeCategory]::Format) {
+                    [void]$kept.Append($s, $i, 2)
+                }
+                $i++
+            }
+            else {
+                [void]$kept.Append($s[$i])
+            }
+        }
+        $s = $kept.ToString()
+    }
     if ($MaxLength -gt 3 -and $s.Length -gt $MaxLength) {
         $s = $s.Substring(0, $MaxLength - 3) + '...'
     }
@@ -626,6 +647,38 @@ function Write-RunWarning {
     $text = ConvertTo-ConsoleText -Text $Message -MaxLength $script:ConsoleLineMaxLength
     Write-ConsoleLogLine -Text "WARNING $text"
     Write-Warning $text
+}
+
+function Write-HeldWarning {
+    <#
+    .SYNOPSIS
+        Writes warnings that were recorded but not shown, for a run that
+        stops before it gets to show them.
+    .DESCRIPTION
+        Each one goes through Write-RunWarning, so it's sanitised and goes
+        in the run log. A warning that can't be written, as with
+        -WarningAction Stop, is passed over, so the error that stopped the
+        run is the one the caller sees.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Record
+    )
+
+    foreach ($r in @($Record | Where-Object { $null -ne $_ })) {
+        $message = $r
+        if ($r -is [System.Management.Automation.WarningRecord]) {
+            $message = $r.Message
+        }
+        try {
+            Write-RunWarning -Message ([string]$message)
+        }
+        catch {
+            Write-Verbose 'A held warning could not be written.'
+        }
+    }
 }
 
 function Write-ConsoleHeader {

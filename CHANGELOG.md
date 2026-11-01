@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
-- Everything the run shows on the console, puts in a progress bar or writes to the run log passes through one sanitiser first. Computer names, user names, network names and Hayabusa's own output come from the evidence, so a crafted one could carry escape codes that rewrite what's already on screen or set the window title. The sanitiser strips escape sequences and every other C0 and C1 control character, DEL included, along with the Unicode bidi overrides and isolates, turns line breaks into spaces and caps the length. Collection names and paths go through it too.
+- Everything the run shows on the console, puts in a progress bar or writes to the run log passes through one sanitiser first. Computer names, user names, network names and Hayabusa's own output come from the evidence, so a crafted one could carry escape codes that rewrite what's already on screen or set the window title. The sanitiser strips escape sequences and every other C0 and C1 control character, DEL included, along with every character in the Unicode format category. That takes out the bidi overrides and isolates and the invisible ones such as the zero-width space and the byte order mark, so a computer name with one hidden inside can't pass for the real one. Line breaks become spaces and the length is capped. Collection names and paths go through it too.
 
 ## [0.10.1] - 2026-10-27
 

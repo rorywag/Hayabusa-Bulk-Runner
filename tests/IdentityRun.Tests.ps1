@@ -9,6 +9,7 @@ BeforeDiscovery {
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
     . (Join-Path $PSScriptRoot 'Helpers/IdentityHelpers.ps1')
+    Enter-TestPlainConsole
     $script:hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
     $script:resolved = Get-TestRunSetting -HayabusaPath $hb
     $script:csv = @($TimelineHeader) + @(New-TimelineRow 'WS01' 'crit' 'RuleA')
@@ -40,6 +41,10 @@ BeforeAll {
         if ($null -eq $r.Identity) { return $null }
         return $r.Identity.Status
     }
+}
+
+AfterAll {
+    Exit-TestPlainConsole
 }
 
 Describe 'A normal batch without RECmdPath' {

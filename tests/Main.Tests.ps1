@@ -4,6 +4,7 @@ BeforeDiscovery {
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
+    Enter-TestPlainConsole
     $script:hb = New-FakeHayabusa -Directory (Join-TestPath $TestDrive 'tool')
     $script:rules = Join-TestPath $TestDrive 'tool' 'rules'
     $script:cfgDir = New-TestDirectory (Join-TestPath $TestDrive 'cfg')
@@ -17,6 +18,10 @@ BeforeAll {
         $in
     }
     $script:in = New-Input 'in'
+}
+
+AfterAll {
+    Exit-TestPlainConsole
 }
 
 Describe 'Quick help' {
@@ -329,6 +334,91 @@ Describe 'Unreadable ZIPs at startup' {
     }
     It 'never creates a working folder for it' {
         Test-Path -LiteralPath (Join-TestPath $TestDrive 'out-zip' '_work' 'D64') | Should -BeFalse
+    }
+}
+
+Describe 'Warnings held for Before the run' {
+    BeforeAll {
+        function script:Invoke-MainShown([hashtable]$Arguments) {
+            # Runs the entry script with its information lines on screen, as
+            # an analyst would, and keeps apart the warnings that were shown
+            # and the ones -WarningVariable recorded.
+            $shown = New-Object System.Collections.Generic.List[string]
+            $wv = $null
+            $iv = $null
+            $stop = $null
+            try {
+                & $MainScript @Arguments -WarningVariable wv -InformationVariable iv -InformationAction Continue 3>&1 6>$null | ForEach-Object {
+                    if ($_ -is [System.Management.Automation.WarningRecord]) {
+                        $shown.Add($_.Message)
+                    }
+                }
+            }
+            catch {
+                $stop = $_.Exception.Message
+            }
+            return [pscustomobject]@{
+                Shown       = $shown.ToArray()
+                Recorded    = @($wv | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.Message })
+                Information = @($iv | ForEach-Object { "$_" })
+                Stop        = $stop
+            }
+        }
+        $script:stray = 'Skipping notes.txt: not a folder, .zip, .vhd or .vhdx.'
+    }
+
+    It 'shows a discovery warning when the run then stops on a duplicate name' {
+        $inD = New-TestDirectory (Join-TestPath $TestDrive 'in-held-dup')
+        New-TestDirectory (Join-TestPath $inD 'HOST01') | Out-Null
+        New-TestZip -Path (Join-TestPath $inD 'host01.zip') -Entries ([ordered]@{ 'a.evtx' = (New-TestByteArray 10 -Random) }) | Out-Null
+        Write-TestText -Path (Join-TestPath $inD 'notes.txt') -Line @('synthetic') | Out-Null
+        $o = Join-TestPath $TestDrive 'out-held-dup'
+        $r = Invoke-MainShown @{ InputRoot = $inD; OutputRoot = $o; HayabusaPath = $hb }
+        $r.Stop | Should -BeLike '*used by more than one*' -Because 'the error goes on unchanged'
+        @($r.Shown | Where-Object { $_ -eq $stray }).Count | Should -Be 1
+        Test-Path -LiteralPath $o | Should -BeFalse
+    }
+
+    It 'shows a discovery warning when the run then stops on the elevation check' {
+        if ($TestOnWindows -and (Test-TestElevated)) {
+            Set-ItResult -Skipped -Because 'this session is elevated on Windows, so the image would be mounted'
+            return
+        }
+        $inE = New-TestDirectory (Join-TestPath $TestDrive 'in-held-elev')
+        Write-TestText -Path (Join-TestPath $inE 'HOST02.vhdx') -Line @('x') | Out-Null
+        Write-TestText -Path (Join-TestPath $inE 'notes.txt') -Line @('synthetic') | Out-Null
+        $o = Join-TestPath $TestDrive 'out-held-elev'
+        $r = Invoke-MainShown @{ InputRoot = $inE; OutputRoot = $o; HayabusaPath = $hb }
+        $r.Stop | Should -BeLike '*HOST02.vhdx*'
+        @($r.Shown | Where-Object { $_ -eq $stray }).Count | Should -Be 1
+        Test-Path -LiteralPath $o | Should -BeFalse
+    }
+
+    Context 'when the run goes ahead' {
+        BeforeAll {
+            $inN = New-TestDirectory (Join-TestPath $TestDrive 'in-held-shown')
+            $d64 = New-TestZip -Path (Join-TestPath $inN 'D64.zip') -Entries ([ordered]@{ 'C/Windows/System32/winevt/Logs/x.evtx' = (New-TestByteArray 50 -Random) })
+            Edit-ZipHeader -Path $d64 -Method 9
+            Write-TestText -Path (Join-TestPath $inN 'notes.txt') -Line @('synthetic') | Out-Null
+            $script:nr = Invoke-MainShown @{ InputRoot = $inN; OutputRoot = (Join-TestPath $TestDrive 'out-held-shown'); HayabusaPath = $hb }
+            $script:zipWarning = "D64.zip can't be extracted by this tool (unsupported compression or encryption)."
+        }
+
+        It 'finishes the run' {
+            $nr.Stop | Should -BeNullOrEmpty
+        }
+        It 'records each warning once in -WarningVariable' {
+            @($nr.Recorded | Where-Object { $_ -eq $stray }).Count | Should -Be 1
+            @($nr.Recorded | Where-Object { $_ -eq $zipWarning }).Count | Should -Be 1
+        }
+        It 'shows each one as a "!" line under Before the run' {
+            $nr.Information | Should -Contain 'Before the run'
+            @($nr.Information | Where-Object { $_ -like '  ! Skipping notes.txt*' }).Count | Should -Be 1
+            @($nr.Information | Where-Object { $_ -like "  ! D64.zip can't be extracted*" }).Count | Should -Be 1
+        }
+        It 'never shows them a second time as warnings' {
+            @($nr.Shown | Where-Object { $_ -eq $stray -or $_ -eq $zipWarning }).Count | Should -Be 0
+        }
     }
 }
 

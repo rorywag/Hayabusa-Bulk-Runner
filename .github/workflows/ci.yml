@@ -146,12 +146,29 @@ jobs:
           Import-Module -Name Pester -RequiredVersion 5.7.1
           $config = New-PesterConfiguration
           $config.Run.Path = './tests'
-          $config.Run.Exit = $true
           $config.Output.Verbosity = 'Detailed'
           $config.TestResult.Enabled = $true
           $config.TestResult.OutputFormat = 'NUnitXml'
           $config.TestResult.OutputPath = 'test-results.xml'
-          Invoke-Pester -Configuration $config
+          $config.Run.Exit = $false
+          $config.Run.PassThru = $true
+          # The suite must leave the environment as it found it, so the
+          # analyst's shell is the same after a run as before it.
+          function Get-EnvironmentLine {
+              foreach ($e in [System.Environment]::GetEnvironmentVariables().GetEnumerator()) { '{0}={1}' -f $e.Key, $e.Value }
+          }
+          $before = @(Get-EnvironmentLine | Sort-Object -CaseSensitive)
+          $result = Invoke-Pester -Configuration $config
+          $after = @(Get-EnvironmentLine | Sort-Object -CaseSensitive)
+          $changed = @(Compare-Object -ReferenceObject $before -DifferenceObject $after -CaseSensitive)
+          foreach ($c in $changed) {
+              $name = ($c.InputObject -split '=', 2)[0]
+              if ($c.SideIndicator -eq '=>') { Write-Host "::error::The test suite left environment variable $name set or changed." }
+              else { Write-Host "::error::The test suite removed or changed environment variable $name." }
+          }
+          if ($result.Result -ne 'Passed' -or $changed.Count -gt 0) {
+              exit 1
+          }
 
       - name: Upload test results
         if: ${{ always() && needs.changes.outputs.code == 'true' }}
