@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Host identity rebuilds the registry hives and transaction logs a Velociraptor offline collector stored sparse. Such a file has its unused holes taken out and a JSON index beside it, `<name>.idx`, mapping its data back to the original offsets, so read as stored its offsets are wrong and RECmd couldn't parse it, and the host came back `NoRegistryHives` or `Partial`. A hive or log with an index is now rebuilt at its original size in the work folder before RECmd reads it, with each file checked on its own. A file without one, as KAPE collects it, is copied byte for byte as before. The recorded SHA-256 is of the file as collected, and `Rehydrated` and `RehydratedTransactionLogs` on each hive's entry show what was rebuilt, so the identity file's `SchemaVersion` is now 2. Version 1 files are still read. The index is treated as untrusted: values that aren't whole numbers in range, or a size over the hive limit, are refused, nothing is read past the end of the stored file, and a hive or log whose index can't be used is copied as collected with a note.
+
 ## [0.10.1] - 2026-10-27
 
 ### Fixed

@@ -182,7 +182,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $ToolVersion = '0.10.1'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'HostIdentity', 'IdentityDashboard')) {
+foreach ($lib in @('Paths', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 

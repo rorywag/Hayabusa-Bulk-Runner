@@ -44,3 +44,44 @@ function Copy-FixtureOutput([string[]]$Argument) {
         Copy-Item -LiteralPath $f.FullName -Destination (Join-TestPath $stampDir $f.Name)
     }
 }
+
+function New-TestPattern([int]$Count, [int]$Seed) {
+    # Bytes that are never zero, so a hole left as zeros is told apart.
+    $b = New-Object byte[] $Count
+    for ($i = 0; $i -lt $Count; $i++) { $b[$i] = [byte]((($i * 31) + $Seed) % 251 + 1) }
+    return , $b
+}
+
+function New-SparseTestFile {
+    <#
+    Writes a file the way a Velociraptor offline collector stores one sparse:
+    the data segments back to back at Path, and Path.idx mapping them to
+    their original offsets, holes between. Segment is a list of byte arrays
+    for data and numbers for holes. A range at offset 0 is written without
+    file_offset or original_offset, as the collector does. Returns the
+    original file's bytes.
+    #>
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][object[]]$Segment, [string]$IndexPath = ($Path + '.idx'))
+    New-TestDirectory -Path (Split-Path -Parent $Path) | Out-Null
+    $stored = New-Object System.IO.MemoryStream
+    $original = New-Object System.IO.MemoryStream
+    $ranges = New-Object System.Collections.Generic.List[string]
+    foreach ($s in $Segment) {
+        $fo = $stored.Length
+        $oo = $original.Length
+        $at = ''
+        if ($fo -ne 0 -or $oo -ne 0) { $at = "`"file_offset`":$fo,`"original_offset`":$oo," }
+        if ($s -is [byte[]]) {
+            $stored.Write($s, 0, $s.Length)
+            $original.Write($s, 0, $s.Length)
+            $ranges.Add("{$at`"file_length`":$($s.Length),`"length`":$($s.Length)}")
+        }
+        else {
+            $original.Write((New-Object byte[] ([int]$s)), 0, [int]$s)
+            $ranges.Add("{$at`"length`":$([int]$s)}")
+        }
+    }
+    [System.IO.File]::WriteAllBytes($Path, $stored.ToArray())
+    Write-TestText -Path $IndexPath -Line @('{"ranges":[', ($ranges -join ",`n"), ']}') | Out-Null
+    return , $original.ToArray()
+}
