@@ -322,7 +322,7 @@ $script:VersionLinePattern = '^\s*Hayabusa v\d+\.\d+'
 # markers in README.md and docs/USAGE.md. This is the only place the tested
 # version is set: the tests and the fake Hayabusa take it from here, and a
 # test checks the docs markers match it.
-$script:TestedHayabusaVersion = '4.2.0'
+$script:TestedHayabusaVersion = '4.3.1'
 
 function Get-HayabusaVersion {
     <#
