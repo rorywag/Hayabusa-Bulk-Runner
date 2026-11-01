@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-01
+
 ### Added
 
 - Live progress during long steps. A parent progress bar shows which host the run is on and a second one shows the step, so a 4 GB hash reports how much of the image it has read and a Hayabusa run shows how long it's been going and the last line it printed. The bars redraw about four times a second and follow `$ProgressPreference`, and they always come down when a host ends, even one that fails or throws. The image hash now streams the image in 4 MB blocks, opened read-only so nothing else can write to it meanwhile, and gives the same SHA-256 as before.
@@ -137,7 +139,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ZIP handling hardened against path traversal, zip bombs and Windows long paths.
 - Tested in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux.
 
-[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/rorywag/Hayabusa-Bulk-Runner/compare/v0.8.1...v0.9.0

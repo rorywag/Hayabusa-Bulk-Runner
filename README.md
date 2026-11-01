@@ -62,7 +62,7 @@ Keep the `lib` folder beside the three scripts, `Invoke-BulkHayabusa.ps1`, `Invo
 It prints a header, then a block for each host as it goes with a line for each step, then a summary and where to look:
 
 ```
-Hayabusa-Bulk-Runner 0.10.1, running Hayabusa
+Hayabusa-Bulk-Runner 0.11.0, running Hayabusa
 Input     D:\Cases\Case01\KAPE, 4 collections, 3 folders, 1 VHDX
 Output    D:\Cases\Case01\Output
 Hayabusa  4.3.1, D:\Tools\hayabusa\hayabusa.exe
