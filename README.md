@@ -25,7 +25,7 @@ The dashboard after a run over eight hosts, with the severity floor at medium:
 
 The console during the same run:
 
-![Console output of a run, starting with a header and a Before the run block that flags a ZIP the tool can't extract, then a block per host with a line for each step and its time, and ending with the summary table and where the dashboards and run log are](docs/images/console.png)
+![Console output of a run, starting with a header and a Before the run block that flags a ZIP the tool can't extract, then a block per host with a line for each step and its time, and ending with the summary table and where to find each output, the combined timeline included](docs/images/console.png)
 
 The host identity dashboard, over a six-host domain, with one workstation's other interfaces and its built-in and system accounts unfolded:
 
@@ -62,7 +62,7 @@ Keep the `lib` folder beside the three scripts, `Invoke-BulkHayabusa.ps1`, `Invo
 It prints a header, then a block for each host as it goes with a line for each step, then a summary and where to look:
 
 ```
-Hayabusa-Bulk-Runner 0.11.0, running Hayabusa
+Hayabusa-Bulk-Runner 0.12.0, running Hayabusa
 Input     D:\Cases\Case01\KAPE, 4 collections, 3 folders, 1 VHDX
 Output    D:\Cases\Case01\Output
 Hayabusa  4.3.1, D:\Tools\hayabusa\hayabusa.exe
