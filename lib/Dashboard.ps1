@@ -429,6 +429,33 @@ function New-DashboardHtml {
         [void]$sb.AppendLine('</tbody></table></div>')
     }
 
+    # The combined timeline sits beside this page, so it's linked by its
+    # path relative to OutputRoot like every other link here.
+    $combined = $null
+    if ($null -ne $Data.PSObject.Properties['CombinedTimeline']) {
+        $combined = $Data.CombinedTimeline
+    }
+    if ($null -ne $combined) {
+        if ($null -ne $combined.Path) {
+            $leaf = Split-Path -Path $combined.Path -Leaf
+            # The same coverage the run gives, so a timeline that leaves
+            # collections out never passes for the whole case.
+            $covered = "$(& $e $combined.Hosts) of $(& $e $combined.Collections) collections"
+            $missing = ''
+            $leftOut = @($combined.LeftOut | Where-Object { $null -ne $_ })
+            if ($leftOut.Count -gt 0) {
+                $missing = " It leaves out $(& $e (Format-CombinedLeftOut -LeftOut $leftOut))."
+            }
+            [void]$sb.AppendLine("<p class=`"meta`"><a href=`"$(ConvertTo-RelativeHref -Segment @($leaf))`">$(& $e $leaf)</a> holds the timelines of $covered in time order, $(& $e (Format-CombinedRowCount -Rows $combined.Rows)), with Hayabusa's own columns.$missing Open it in Timeline Explorer, as it isn't escaped for Excel.</p>")
+        }
+        elseif (-not $combined.Enabled) {
+            [void]$sb.AppendLine('<p class="meta">The combined timeline is turned off in the engagement config.</p>')
+        }
+        elseif ($null -ne $combined.Error) {
+            [void]$sb.AppendLine("<p class=`"meta`">The combined timeline wasn't built this time, $(& $e $combined.Reason), so see the warning from the run. Any earlier combined_timeline.csv beside this page is out of date.</p>")
+        }
+    }
+
     [void]$sb.AppendLine('<footer>Files beside triage_dashboard.html: triage_rules.csv, triage_hosts.csv, run_manifest.csv, _runs, and one folder per collection.</footer>')
     [void]$sb.AppendLine('</main></body>')
     [void]$sb.AppendLine('</html>')

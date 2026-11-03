@@ -27,6 +27,8 @@ $script:ReservedCollectionNames = @(
     'triage_dashboard.html.tmp'
     'identity_dashboard.html'
     'identity_dashboard.html.tmp'
+    'combined_timeline.csv'
+    'combined_timeline.csv.tmp'
 )
 
 function ConvertTo-CollectionName {

@@ -95,6 +95,7 @@ Summary
   WS04        Skipped
 3 processed, 2 completed, 0 completed with errors, 1 failed, 1 skipped, in 24m01s.
 Triage dashboard     D:\Cases\Case01\Output\triage_dashboard.html
+Combined timeline    D:\Cases\Case01\Output\combined_timeline.csv, 18 rows
 Run log              D:\Cases\Case01\Output\_runs\run_20261101T091502Z_3f2c8a1e-5b7d-4c90-9e21-6a4f0d8b7c13.log
 ```
 

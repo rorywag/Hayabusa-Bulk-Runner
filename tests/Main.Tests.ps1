@@ -143,7 +143,7 @@ Describe 'A run' {
     }
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
-        $m1.SchemaVersion | Should -Be 8
+        $m1.SchemaVersion | Should -Be 9
         # Compared with $ToolVersion as the script sets it, so a release needs no test change.
         $toolVersion = [regex]::Match([System.IO.File]::ReadAllText($MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
         $toolVersion | Should -Match '^\d+\.\d+\.\d+$'
@@ -431,10 +431,108 @@ Describe 'A rollup failure' {
         $r = & $MainScript -PassThru -InputRoot $in -OutputRoot $o -HayabusaPath $hb -WarningVariable w -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
         $m = Read-RunMeta $r.RunMetaPath
         @($iv | ForEach-Object { "$_" }) | Should -Contain 'Triage dashboard     could not be built, see the warning above'
+        @($iv | ForEach-Object { "$_" }) | Should -Contain 'Combined timeline    not built, the rollup failed, see the warning above'
         $m.Rollup.Error | Should -Not -BeNullOrEmpty
         $m.CompletedUtc | Should -Not -BeNullOrEmpty
         $m.Summary.Discovered | Should -Be 2
         @($w | Where-Object { "$_" -like 'Rollup failed:*Invoke-HayabusaRollup.ps1*' }).Count | Should -Be 1
+    }
+}
+
+Describe 'The combined timeline in a run' {
+    BeforeAll {
+        # The fake Hayabusa runs off Windows too once the Windows check is
+        # stubbed, so these runs complete their hosts on every platform.
+        Mock Assert-HayabusaHost { }
+        $script:co = Join-TestPath $TestDrive 'out-combined'
+        $iv = $null
+        $script:cr = & $MainScript -PassThru -InputRoot $in -OutputRoot $co -HayabusaPath $hb -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $script:cinfo = @($iv | ForEach-Object { "$_" })
+        $script:cmeta = Read-RunMeta $cr.RunMetaPath
+        $script:cpath = Join-TestPath $co 'combined_timeline.csv'
+    }
+
+    It 'writes every completed host''s rows into one file, copied as the fake wrote them' {
+        $cr.Summary.Completed | Should -Be 2
+        $want = @($TimelineHeader) + @(New-TimelineRow 'WS02' 'high' 'RuleB') + @(New-TimelineRowSet 'WS01' 'crit' 'RuleA' 2) + @(New-TimelineRow 'WS01' 'high' 'RuleB')
+        @(Get-Content -LiteralPath $cpath) | Should -Be $want -Because 'every row has the same Timestamp, so they keep the manifest order, HOST_02 first'
+    }
+
+    It 'says where it is and how many rows it has, lined up with the other closing lines' {
+        $cinfo | Should -Contain "Combined timeline    $cpath, 4 rows"
+        [array]::IndexOf($cinfo, "Combined timeline    $cpath, 4 rows") | Should -Be ([array]::IndexOf($cinfo, "Triage dashboard     $(Join-TestPath $co 'triage_dashboard.html')") + 1)
+        @(Get-Content -LiteralPath $cr.RunLogPath) -join "`n" | Should -Match ([regex]::Escape("Combined timeline    $cpath, 4 rows"))
+    }
+
+    It 'is recorded in run-meta and the -PassThru object' {
+        $cmeta.SchemaVersion | Should -Be 9
+        $cmeta.Rollup.CombinedTimeline | Should -Be $cpath
+        $cmeta.Rollup.CombinedTimelineRows | Should -Be 4
+        $cmeta.Rollup.CombinedTimelineHosts | Should -Be 2
+        $cmeta.Rollup.CombinedTimelineError | Should -BeNullOrEmpty
+        $cr.Rollup.CombinedTimeline | Should -Be $cpath
+        $cr.Rollup.CombinedTimelineRows | Should -Be 4
+        $cr.Rollup.CombinedTimelineHosts | Should -Be 2
+        $cr.Rollup.Contains('CombinedTimelineError') | Should -BeTrue
+        $cmeta.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($cmeta.Rollup.CombinedTimelineLeftOut).Count | Should -Be 0
+        $cr.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($cr.Rollup.CombinedTimelineLeftOut).Count | Should -Be 0
+    }
+
+    It 'says which collections are left out, in the closing line, the warnings and run-meta' {
+        $inP = New-TestDirectory (Join-TestPath $TestDrive 'in-combined-partial')
+        New-FakeHost -InputRoot $inP -Name 'WS01' -Files @{ 'r.csv' = (@($TimelineHeader) + @(New-TimelineRowSet 'WS01' 'high' 'RuleA' 3)) } | Out-Null
+        New-FakeHost -InputRoot $inP -Name 'WS05' -Behavior "EXIT=2`nCSV=none" | Out-Null
+        $o = Join-TestPath $TestDrive 'out-combined-partial'
+        $iv = $null
+        $w = $null
+        $r = & $MainScript -PassThru -InputRoot $inP -OutputRoot $o -HayabusaPath $hb -WarningVariable w -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $path = Join-TestPath $o 'combined_timeline.csv'
+        @($iv | ForEach-Object { "$_" }) | Should -Contain "Combined timeline    $path, 3 rows from 1 of 2 collections"
+        $warning = "Combined timeline: 1 of 2 collections isn't in it, WS05 because it failed."
+        @($w | ForEach-Object { "$_" }) | Should -Contain $warning
+        (@(Get-Content -LiteralPath $r.RunLogPath) -join "`n") | Should -Match ([regex]::Escape("WARNING $warning"))
+        $m = Read-RunMeta $r.RunMetaPath
+        $m.Rollup.CombinedTimelineHosts | Should -Be 1
+        $m.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($m.Rollup.CombinedTimelineLeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('WS05=Failed')
+        @($r.Rollup.CombinedTimelineLeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('WS05=Failed')
+        $r.Rollup.CombinedTimelineCollections | Should -Be 2
+    }
+
+    It 'is linked from the triage dashboard' {
+        [System.IO.File]::ReadAllText((Join-TestPath $co 'triage_dashboard.html')) | Should -Match ([regex]::Escape('<a href="combined_timeline.csv">combined_timeline.csv</a> holds the timelines of 2 of 2 collections in time order, 4 rows, with Hayabusa''s own columns. Open it'))
+    }
+
+    It 'is left out when the config sets CombinedTimeline to $false' {
+        $o = Join-TestPath $TestDrive 'out-combined-off'
+        $iv = $null
+        $r = & $MainScript -PassThru -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath (New-Config 'combined-off.psd1' '@{ CombinedTimeline = $false }') -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        Test-Path -LiteralPath (Join-TestPath $o 'combined_timeline.csv') | Should -BeFalse
+        @($iv | ForEach-Object { "$_" }) | Should -Contain 'Combined timeline    not built, turned off in the engagement config'
+        $r.Rollup.CombinedTimeline | Should -BeNullOrEmpty
+        $r.Rollup.CombinedTimelineError | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-TestPath $o 'triage_dashboard.html') | Should -BeTrue
+    }
+
+    It 'warns and finishes the run when it can''t be built' {
+        $o = New-TestDirectory (Join-TestPath $TestDrive 'out-combined-blocked')
+        New-TestDirectory (Join-TestPath $o 'combined_timeline.csv') | Out-Null
+        $iv = $null
+        $w = $null
+        $r = & $MainScript -PassThru -InputRoot $in -OutputRoot $o -HayabusaPath $hb -WarningVariable w -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $r.Rollup.Error | Should -BeNullOrEmpty
+        $r.Rollup.CombinedTimelineError | Should -BeLike 'Combined timeline not built, because a folder named combined_timeline.csv is in the way*'
+        @($w | ForEach-Object { "$_" }) | Should -Contain $r.Rollup.CombinedTimelineError
+        @($iv | ForEach-Object { "$_" }) | Should -Contain 'Combined timeline    not built, a folder is in the way, see the warning above'
+        (Read-RunMeta $r.RunMetaPath).CompletedUtc | Should -Not -BeNullOrEmpty
+    }
+
+    It 'stops the run before anything is written when CombinedTimeline isn''t $true or $false' {
+        $o = Join-TestPath $TestDrive 'out-combined-badcfg'
+        Get-ThrownMessage { & $MainScript -InputRoot $in -OutputRoot $o -HayabusaPath $hb -ConfigPath (New-Config 'combined-bad.psd1' "@{ CombinedTimeline = 'no' }") } | Should -BeLike "*sets CombinedTimeline to 'no'. Set it to `$true or `$false, or remove the line."
+        Test-Path -LiteralPath $o | Should -BeFalse
     }
 }
 

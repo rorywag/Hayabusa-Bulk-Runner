@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A combined timeline, `combined_timeline.csv` in OutputRoot, holding every included host's Hayabusa timeline in one file in time order, so it opens anywhere a single Hayabusa timeline does. It takes the same hosts the dashboard counts, Completed or CompletedWithErrors with a timeline the rollup could read, and copies each row byte for byte as Hayabusa wrote it, merged on the UTC Timestamp `-U` gives, with ties kept in the manifest's order. It's streamed, so memory stays flat however large the run is. When the hosts' columns differ nothing is written, and the warning names each set of columns with its hosts. A Timestamp that isn't in Hayabusa's UTC form, or a host's file out of time order, stops it the same way and names the host and the line, and any earlier file is left as it was. It's written through a temporary file, never through a link, and only when there's the space. A computer name shared by two collections is warned about, since those rows can't be told apart. The run also says which collections aren't in it, so a timeline covering 35 of 40 hosts never reads as the whole case. The closing line and the dashboard give the coverage, and one warning names the collections left out, grouped by why. It's built with the rollup on every run and by `Invoke-HayabusaRollup.ps1`, and the dashboard links it with its row count. `CombinedTimeline = $false` in the engagement config turns it off.
+
+### Changed
+
+- Run-meta's `SchemaVersion` is now 9. Its `Rollup` record, which the `-PassThru` object carries too, has the combined timeline's path, row count, host count and any error, in `CombinedTimeline`, `CombinedTimelineRows`, `CombinedTimelineHosts` and `CombinedTimelineError`, along with `CombinedTimelineCollections`, the number of collections in the manifest, and `CombinedTimelineLeftOut`, the ones not in it with their reasons.
+
 ## [0.11.0] - 2026-11-01
 
 ### Added

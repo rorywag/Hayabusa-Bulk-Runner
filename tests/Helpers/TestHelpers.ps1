@@ -13,7 +13,7 @@ $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHay
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
-$script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
+$script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
@@ -283,6 +283,26 @@ function Get-TestEnvironment {
         '{0}={1}' -f $e.Key, $e.Value
     }
     return , [string[]]@($lines | Sort-Object -CaseSensitive)
+}
+
+function New-TestDanglingLink {
+    <#
+    Makes Path a symbolic link whose target is gone, by linking it to a
+    file beside it and deleting that file. Returns $null when it's made,
+    or why not when this session can't create links, for Set-ItResult.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    $target = "$Path.gone"
+    [System.IO.File]::WriteAllText($target, 'soon gone')
+    try {
+        New-Item -ItemType SymbolicLink -Path $Path -Target $target -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Remove-Item -LiteralPath $target -Force
+        return "this session can't create a symbolic link: $($_.Exception.Message)"
+    }
+    Remove-Item -LiteralPath $target -Force
+    return $null
 }
 
 function Get-TestToolVersion {

@@ -12,6 +12,8 @@
     - triage_hosts.csv: one row per collection, worst first
     - triage_dashboard.html: a self-contained dashboard with no script and no
       external requests
+    - combined_timeline.csv: every included host's timeline in one file, in
+      time order, with Hayabusa's columns and rows unchanged
 
     No host is rerun. The manifest and per-host output are read only. This
     does not need Windows, Hayabusa, the original InputRoot or an elevated
@@ -49,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($Help) {
     @(
-        'Invoke-HayabusaRollup.ps1: rebuilds the triage CSVs and dashboard from an existing OutputRoot, without rerunning anything.'
+        'Invoke-HayabusaRollup.ps1: rebuilds the triage CSVs, the dashboard and the combined timeline from an existing OutputRoot, without rerunning anything.'
         ''
         'Usage:'
         '  .\Invoke-HayabusaRollup.ps1 -OutputRoot <folder>'
@@ -71,7 +73,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 }
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Manifest', 'Results', 'Rollup', 'Dashboard')) {
+foreach ($lib in @('Paths', 'Console', 'Archive', 'Manifest', 'Results', 'Rollup', 'CombinedTimeline', 'Dashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -80,4 +82,10 @@ $OutputRoot = ConvertTo-NormalizedPath -Path $OutputRoot
 $result = Invoke-Rollup -OutputRoot $OutputRoot
 Write-Verbose "Rollup: $($result.HostCount) host row(s), $($result.RuleCount) rule(s)."
 Write-Information "Rebuilt the rollup in $OutputRoot. Open triage_dashboard.html there to start triage."
+if ($null -ne $result.CombinedTimeline.Path) {
+    Write-Information "The combined timeline is $($result.CombinedTimeline.Path), with $(Format-CombinedCoverage -Rows $result.CombinedTimeline.Rows -Hosts $result.CombinedTimeline.Hosts -Collections $result.CombinedTimeline.Collections)."
+}
+elseif ($null -ne $result.CombinedTimeline.Error) {
+    Write-Information "The combined timeline wasn't built, $($result.CombinedTimeline.Reason), see the warning above."
+}
 $result

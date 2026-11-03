@@ -271,7 +271,7 @@ Describe 'The entry script and host identity' {
         $info | Should -Contain "Identity dashboard   $($r.Identity.Dashboard)"
         @($info | Where-Object { $_ -like 'RECmd *' }).Count | Should -Be 1
         $raw = Get-Content -LiteralPath $r.RunMetaPath -Raw
-        ($raw | ConvertFrom-Json).SchemaVersion | Should -Be 8
+        ($raw | ConvertFrom-Json).SchemaVersion | Should -Be 9
         ($raw -replace '"RunLog":\s*"[^"]*"', '') | Should -Not -Match 'identity|RECmd'
         $html = [System.IO.File]::ReadAllText($r.Identity.Dashboard)
         $html | Should -Match '<td>HOST01</td>'
@@ -307,7 +307,7 @@ Describe 'The entry script and host identity' {
         $r.Summary.Processed | Should -Be 2
         $r.Identity.Dashboard | Should -Be (Join-TestPath $o 'identity_dashboard.html')
         Test-Path -LiteralPath $r.Identity.Dashboard | Should -BeTrue
-        foreach ($f in 'run_manifest.csv', 'triage_dashboard.html', 'triage_hosts.csv', 'triage_rules.csv') {
+        foreach ($f in 'run_manifest.csv', 'triage_dashboard.html', 'triage_hosts.csv', 'triage_rules.csv', 'combined_timeline.csv') {
             Test-Path -LiteralPath (Join-TestPath $o $f) | Should -BeFalse -Because "$f is from a Hayabusa run"
         }
         # _runs holds this run's log, and no run-meta.

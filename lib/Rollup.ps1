@@ -327,6 +327,9 @@ function Get-RollupData {
         row sorts below them. Within each group, ties go to problem statuses
         first, then Collection.
 
+        ManifestIndex is each host's place in the manifest, for anything
+        that needs the collections in the order they were listed.
+
         Rules: one row per RuleTitle and Level. HostsAffected counts
         collections, so a [multiple] collection counts once even though it
         holds more than one machine. Sorted by severity, HostsAffected and
@@ -349,9 +352,11 @@ function Get-RollupData {
     $hosts = New-Object System.Collections.Generic.List[object]
     $ruleTotals = @{}
     $rowsByRun = @{}
+    $manifestIndex = 0
 
     foreach ($entry in (Get-RunManifest -Path $manifestPath).Values) {
         $collection = [string]$entry.Collection
+        $manifestIndex++
         $paths = Get-CollectionOutputPath -OutputRoot $OutputRoot -Collection $collection
 
         if (-not [string]::IsNullOrEmpty([string]$entry.RunId)) {
@@ -475,6 +480,7 @@ function Get-RollupData {
                 ReadError     = $readError
                 RunId         = [string]$entry.RunId
                 Links         = $links
+                ManifestIndex = $manifestIndex
             })
     }
 
@@ -568,23 +574,57 @@ function ConvertTo-RollupCsvText {
 function Invoke-Rollup {
     <#
     .SYNOPSIS
-        Writes triage_hosts.csv, triage_rules.csv and triage_dashboard.html
-        under OutputRoot.
+        Writes triage_hosts.csv, triage_rules.csv, triage_dashboard.html and
+        combined_timeline.csv under OutputRoot.
     .DESCRIPTION
         Built only from the manifest, the per-host CSVs and run-meta, so it
         can be rebuilt from an existing OutputRoot at any time without
         rerunning a host. The manifest and per-host files are never
-        modified. Each output is written atomically. The CSVs carry a UTF-8
-        byte order mark so Excel reads non-ASCII names correctly.
+        modified. Each output is written atomically. The triage CSVs carry
+        a UTF-8 byte order mark so Excel reads non-ASCII names correctly.
+
+        The combined timeline is built first, so the dashboard can link
+        it, and SkipCombinedTimeline leaves it out. A problem building it
+        is a warning and never stops the rest of the rollup.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [string]$OutputRoot
+        [string]$OutputRoot,
+
+        [switch]$SkipCombinedTimeline
     )
 
     $data = Get-RollupData -OutputRoot $OutputRoot
+
+    $combined = [pscustomobject]@{ Enabled = -not $SkipCombinedTimeline; Path = $null; Rows = $null; Hosts = $null; Collections = $null; LeftOut = $null; Error = $null; Reason = $null }
+    if ($SkipCombinedTimeline) {
+        $combined.Reason = 'turned off in the engagement config'
+    }
+    else {
+        try {
+            $built = Invoke-CombinedTimeline -OutputRoot $OutputRoot -Hosts $data.Hosts
+            $combined.Path = $built.Path
+            $combined.Rows = $built.Rows
+            $combined.Hosts = $built.Hosts
+            $combined.Collections = $built.Collections
+            $combined.LeftOut = $built.LeftOut
+            $combined.Error = $built.Error
+            $combined.Reason = $built.Reason
+            foreach ($w in @($built.Warnings)) {
+                Write-Warning $w
+            }
+        }
+        catch {
+            $combined.Error = "Combined timeline not built, because $($_.Exception.Message)"
+            $combined.Reason = 'it could not be written'
+        }
+        if ($null -ne $combined.Error) {
+            Write-Warning $combined.Error
+        }
+    }
+    $data | Add-Member -NotePropertyName CombinedTimeline -NotePropertyValue $combined
 
     $hostsPath = Join-Path -Path $OutputRoot -ChildPath 'triage_hosts.csv'
     $rulesPath = Join-Path -Path $OutputRoot -ChildPath 'triage_rules.csv'
@@ -601,12 +641,13 @@ function Invoke-Rollup {
     }
 
     [pscustomobject]@{
-        HostsCsv  = $hostsPath
-        RulesCsv  = $rulesPath
-        Dashboard = $dashboardPath
-        HostCount = @($data.Hosts).Count
-        RuleCount = @($data.Rules).Count
-        Warnings  = $data.Warnings
-        BuiltUtc  = $data.BuiltUtc
+        HostsCsv         = $hostsPath
+        RulesCsv         = $rulesPath
+        Dashboard        = $dashboardPath
+        HostCount        = @($data.Hosts).Count
+        RuleCount        = @($data.Rules).Count
+        Warnings         = $data.Warnings
+        BuiltUtc         = $data.BuiltUtc
+        CombinedTimeline = $combined
     }
 }
