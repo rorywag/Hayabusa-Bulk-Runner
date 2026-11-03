@@ -488,16 +488,18 @@ try {
     # results already in the manifest. The rollup's own warnings are shown
     # as it writes them and go in the run log after.
     $rollupRecord = [ordered]@{
-        HostsCsv              = $null
-        RulesCsv              = $null
-        Dashboard             = $null
-        HostCount             = $null
-        RuleCount             = $null
-        CombinedTimeline      = $null
-        CombinedTimelineRows  = $null
-        CombinedTimelineHosts = $null
-        CombinedTimelineError = $null
-        Error                 = $null
+        HostsCsv                    = $null
+        RulesCsv                    = $null
+        Dashboard                   = $null
+        HostCount                   = $null
+        RuleCount                   = $null
+        CombinedTimeline            = $null
+        CombinedTimelineRows        = $null
+        CombinedTimelineHosts       = $null
+        CombinedTimelineCollections = $null
+        CombinedTimelineLeftOut     = $null
+        CombinedTimelineError       = $null
+        Error                       = $null
     }
     $combinedReason = 'the rollup failed'
     $rollupWarnings = $null
@@ -511,6 +513,8 @@ try {
         $rollupRecord.CombinedTimeline = $rollup.CombinedTimeline.Path
         $rollupRecord.CombinedTimelineRows = $rollup.CombinedTimeline.Rows
         $rollupRecord.CombinedTimelineHosts = $rollup.CombinedTimeline.Hosts
+        $rollupRecord.CombinedTimelineCollections = $rollup.CombinedTimeline.Collections
+        $rollupRecord.CombinedTimelineLeftOut = $rollup.CombinedTimeline.LeftOut
         $rollupRecord.CombinedTimelineError = $rollup.CombinedTimeline.Error
         $combinedReason = $rollup.CombinedTimeline.Reason
     }
@@ -558,7 +562,7 @@ try {
         Write-ConsoleLine -Segment @('Triage dashboard     could not be built, see the warning above')
     }
     if ($null -ne $rollupRecord.CombinedTimeline) {
-        Write-ConsoleLine -Segment @('Combined timeline    ', $rollupRecord.CombinedTimeline, ", $(Format-CombinedRowCount -Rows $rollupRecord.CombinedTimelineRows)")
+        Write-ConsoleLine -Segment @('Combined timeline    ', $rollupRecord.CombinedTimeline, ", $(Format-CombinedCoverage -Rows $rollupRecord.CombinedTimelineRows -Hosts $rollupRecord.CombinedTimelineHosts -Collections $rollupRecord.CombinedTimelineCollections)")
     }
     elseif ($null -ne $rollupRecord.CombinedTimelineError -or $null -ne $rollupRecord.Error) {
         Write-ConsoleLine -Segment @("Combined timeline    not built, $combinedReason, see the warning above")

@@ -292,6 +292,23 @@ Describe 'When it stops' {
         [System.IO.File]::ReadAllText($target, $utf8) | Should -BeExactly 'outside OutputRoot'
     }
 
+    It 'refuses a dangling link at <Leaf>, whose target is gone' -ForEach @(
+        @{ Leaf = 'combined_timeline.csv' }
+        @{ Leaf = 'combined_timeline.csv.tmp' }
+    ) {
+        $o = New-CombinedRoot "dangling-$($Leaf.Replace('.', '-'))" @(@{ Name = 'H1'; Bytes = (ConvertTo-CsvByte @($hdr, (Row '2026-10-01 10:00:00.000 +00:00'))) })
+        $link = Join-TestPath $o $Leaf
+        $skip = New-TestDanglingLink -Path $link
+        if ($null -ne $skip) {
+            Set-ItResult -Skipped -Because $skip
+            return
+        }
+        $r = Build $o
+        $r.Reason | Should -BeExactly 'the output path is a link or junction'
+        $r.Error | Should -BeLike "*because $link is a link or junction, which could point anywhere.*"
+        Test-Path -LiteralPath "$link.gone" | Should -BeFalse -Because 'nothing was written through the link to its old target'
+    }
+
     It 'skips it with a warning when there isn''t the room' {
         Mock Get-FreeSpace { [long]10 }
         $o = New-CombinedRoot 'nospace' @(@{ Name = 'H1'; Bytes = (ConvertTo-CsvByte @($hdr, (Row '2026-10-01 10:00:00.000 +00:00'))) })
@@ -331,6 +348,88 @@ Describe 'Hosts sharing a computer name' {
         $w = @((Build $o).Warnings)
         $w.Count | Should -Be 1
         $w[0] | Should -BeExactly "Combined timeline: A and B both have rows for computer WS01, so those rows can't be told apart in it."
+    }
+}
+
+Describe 'Coverage' {
+    BeforeAll {
+        $script:okRow = ConvertTo-CsvByte @($hdr, (Row '2026-10-01 10:00:00.000 +00:00'))
+        $script:noLevel = ConvertTo-CsvByte @('"Timestamp","Computer"', '"2026-10-01 10:00:00.000 +00:00","X"')
+    }
+
+    It 'lists nothing when every collection is in it, and the closing text is just the rows' {
+        $o = New-CombinedRoot 'cover-all' @(@{ Name = 'WS01'; Bytes = $okRow }, @{ Name = 'WS02'; Bytes = $okRow })
+        $r = Build $o
+        $r.Collections | Should -Be 2
+        $r.Hosts | Should -Be 2
+        @($r.LeftOut).Count | Should -Be 0
+        @($r.Warnings | Where-Object { $_ -like "*isn't in it*" -or $_ -like "*aren't in it*" }).Count | Should -Be 0
+        Format-CombinedCoverage -Rows $r.Rows -Hosts $r.Hosts -Collections $r.Collections | Should -BeExactly '2 rows'
+    }
+
+    It 'names a Failed collection it leaves out' {
+        $o = New-CombinedRoot 'cover-failed' @(@{ Name = 'WS01'; Bytes = $okRow }, @{ Name = 'WS05'; Status = 'Failed'; Bytes = $okRow })
+        $r = Build $o
+        $r.Collections | Should -Be 2
+        $r.Hosts | Should -Be 1
+        @($r.LeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('WS05=Failed')
+        @($r.Warnings) | Should -Contain "Combined timeline: 1 of 2 collections isn't in it, WS05 because it failed."
+        Format-CombinedCoverage -Rows $r.Rows -Hosts $r.Hosts -Collections $r.Collections | Should -BeExactly '1 row from 1 of 2 collections'
+    }
+
+    It 'names a collection the rollup found Unreadable' {
+        $o = New-CombinedRoot 'cover-unreadable' @(@{ Name = 'WS01'; Bytes = $okRow }, @{ Name = 'FS02'; Bytes = $noLevel })
+        $r = Build $o
+        @($r.LeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('FS02=Unreadable')
+        @($r.Warnings) | Should -Contain "Combined timeline: 1 of 2 collections isn't in it, FS02 because its timeline couldn't be read."
+    }
+
+    It 'names collections still Pending or Running after an interrupted batch' {
+        $o = New-CombinedRoot 'cover-pending' @(
+            @{ Name = 'WS01'; Bytes = $okRow }
+            @{ Name = 'SQL01'; Status = 'Running'; Bytes = $null }
+            @{ Name = 'SQL02'; Status = 'Pending'; Bytes = $null }
+        )
+        $r = Build $o
+        @($r.LeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('SQL01=Running', 'SQL02=Pending')
+        @($r.Warnings) | Should -Contain "Combined timeline: 2 of 3 collections aren't in it, SQL01 and SQL02 because they haven't run yet."
+    }
+
+    It 'groups them by reason, failed first, each in the manifest''s order' {
+        $o = New-CombinedRoot 'cover-groups' @(
+            @{ Name = 'SQL01'; Status = 'Pending'; Bytes = $null }
+            @{ Name = 'WS09'; Status = 'Failed'; Bytes = $null }
+            @{ Name = 'DC01'; Bytes = $okRow }
+            @{ Name = 'FS02'; Bytes = $noLevel }
+            @{ Name = 'WS05'; Status = 'Failed'; Bytes = $okRow }
+            @{ Name = 'SQL02'; Status = 'Running'; Bytes = $null }
+            @{ Name = 'WS01'; Bytes = $okRow }
+        )
+        $r = Build $o
+        $want = "Combined timeline: 5 of 7 collections aren't in it, WS09 and WS05 because they failed, FS02 because its timeline couldn't be read, and SQL01 and SQL02 because they haven't run yet."
+        @($r.Warnings | Where-Object { $_ -like '*in it,*' }) | Should -Be @($want)
+        $r.Hosts | Should -Be 2
+        $r.Collections | Should -Be 7
+    }
+
+    It 'joins two groups with a comma and and' {
+        Format-CombinedLeftOut -LeftOut @([pscustomobject]@{ Collection = 'A'; Reason = 'Failed' }, [pscustomobject]@{ Collection = 'B'; Reason = 'Pending' }) | Should -BeExactly "A because it failed, and B because it hasn't run yet"
+    }
+
+    It 'sanitises the names it lists' {
+        $evil = "WS05$([char]27)[2J$([char]0x200B)"
+        Format-CombinedLeftOut -LeftOut @([pscustomobject]@{ Collection = $evil; Reason = 'Failed' }) | Should -BeExactly 'WS05 because it failed'
+    }
+
+    It 'gives the same coverage on the dashboard and lists what''s left out' {
+        $o = New-CombinedRoot 'cover-dashboard' @(
+            @{ Name = 'WS01'; Bytes = $okRow }
+            @{ Name = 'WS05'; Status = 'Failed'; Bytes = $null }
+            @{ Name = 'SQL01'; Status = 'Pending'; Bytes = $null }
+        )
+        Invoke-Rollup -OutputRoot $o -WarningAction SilentlyContinue | Out-Null
+        $html = [System.IO.File]::ReadAllText((Join-TestPath $o 'triage_dashboard.html'))
+        $html | Should -Match ([regex]::Escape("holds the timelines of 1 of 3 collections in time order, 1 row, with Hayabusa's own columns. It leaves out WS05 because it failed, and SQL01 because it hasn&#39;t run yet."))
     }
 }
 
@@ -377,7 +476,7 @@ Describe 'In the rollup' {
         $r.CombinedTimeline.Rows | Should -Be 3
         $r.CombinedTimeline.Hosts | Should -Be 2
         $html = [System.IO.File]::ReadAllText((Join-TestPath $ro 'triage_dashboard.html'))
-        $html | Should -Match ([regex]::Escape('<a href="combined_timeline.csv">combined_timeline.csv</a> holds every included host''s timeline in time order, 3 rows from 2 host(s)'))
+        $html | Should -Match ([regex]::Escape('<a href="combined_timeline.csv">combined_timeline.csv</a> holds the timelines of 2 of 2 collections in time order, 3 rows, with Hayabusa''s own columns. Open it'))
     }
 
     It 'is left out with SkipCombinedTimeline, and the dashboard says it''s off' {
@@ -411,6 +510,18 @@ Describe 'In the rollup' {
         $r.CombinedTimeline.Rows | Should -Be 2
         (Get-CombinedLine $o)[1] | Should -BeLike '*"WS02"*'
         @($iv | ForEach-Object { "$_" }) | Should -Contain "The combined timeline is $(Join-TestPath $o 'combined_timeline.csv'), with 2 rows."
+    }
+
+    It 'gives the coverage from Invoke-HayabusaRollup.ps1 when collections are left out' {
+        $o = New-CombinedRoot 'rollup-script-partial' @(
+            @{ Name = 'WS01'; Bytes = (ConvertTo-CsvByte @($hdr, (Row '2026-10-01 10:00:00.000 +00:00' 'WS01'))) }
+            @{ Name = 'WS05'; Status = 'Failed'; Bytes = $null }
+        )
+        $iv = $null
+        $w = $null
+        & $RollupScript -OutputRoot $o -InformationVariable iv -InformationAction SilentlyContinue -WarningVariable w -WarningAction SilentlyContinue | Out-Null
+        @($iv | ForEach-Object { "$_" }) | Should -Contain "The combined timeline is $(Join-TestPath $o 'combined_timeline.csv'), with 1 row from 1 of 2 collections."
+        @($w | ForEach-Object { "$_" }) | Should -Contain "Combined timeline: 1 of 2 collections isn't in it, WS05 because it failed."
     }
 }
 

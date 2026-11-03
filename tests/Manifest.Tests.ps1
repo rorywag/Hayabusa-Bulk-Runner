@@ -181,6 +181,46 @@ Describe 'Path helpers' {
         $d = New-TestDirectory (Join-TestPath $TestDrive 'blocker' 'triage_dashboard.html')
         Get-ThrownMessage { Write-TextFileAtomic -Path $d -Text 'x' } | Should -BeLike '*folder of that name is in the way*'
     }
+    It 'Write-TextFileAtomic refuses a dangling link at <Which>' -ForEach @(
+        @{ Which = 'the path'; Suffix = '' }
+        @{ Which = 'the temporary path'; Suffix = '.tmp' }
+    ) {
+        $p = Join-TestPath (New-TestDirectory (Join-TestPath $TestDrive "linked$($Suffix.Replace('.', '-'))")) 'triage_hosts.csv'
+        $skip = New-TestDanglingLink -Path "$p$Suffix"
+        if ($null -ne $skip) {
+            Set-ItResult -Skipped -Because $skip
+            return
+        }
+        Get-ThrownMessage { Write-TextFileAtomic -Path $p -Text 'x' } | Should -BeExactly "Cannot write $p because $p$Suffix is a link or junction, which could point anywhere."
+        Test-Path -LiteralPath "$p$Suffix.gone" | Should -BeFalse -Because 'nothing was written through the link to its old target'
+    }
+    It 'Move-FileIntoPlace refuses to replace a link' {
+        $d = New-TestDirectory (Join-TestPath $TestDrive 'move-link')
+        $p = Join-TestPath $d 'out.csv'
+        $skip = New-TestDanglingLink -Path $p
+        if ($null -ne $skip) {
+            Set-ItResult -Skipped -Because $skip
+            return
+        }
+        $src = Join-TestPath $d 'out.csv.tmp'
+        [System.IO.File]::WriteAllText($src, 'new')
+        Get-ThrownMessage { Move-FileIntoPlace -Source $src -Path $p } | Should -BeExactly "Cannot replace $p because it is a link or junction, which could point anywhere."
+        Test-Path -LiteralPath $src | Should -BeTrue
+    }
+    It 'Test-PathIsLink tells a missing path, a file and a link apart' {
+        $d = New-TestDirectory (Join-TestPath $TestDrive 'islink')
+        Test-PathIsLink -Path (Join-TestPath $d 'missing' 'nested.txt') | Should -BeFalse
+        $f = Join-TestPath $d 'plain.txt'
+        [System.IO.File]::WriteAllText($f, 'x')
+        Test-PathIsLink -Path $f | Should -BeFalse
+        $l = Join-TestPath $d 'dangling.txt'
+        $skip = New-TestDanglingLink -Path $l
+        if ($null -ne $skip) {
+            Set-ItResult -Skipped -Because $skip
+            return
+        }
+        Test-PathIsLink -Path $l | Should -BeTrue
+    }
 }
 
 Describe 'Atomic replace' {

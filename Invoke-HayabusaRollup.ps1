@@ -83,7 +83,7 @@ $result = Invoke-Rollup -OutputRoot $OutputRoot
 Write-Verbose "Rollup: $($result.HostCount) host row(s), $($result.RuleCount) rule(s)."
 Write-Information "Rebuilt the rollup in $OutputRoot. Open triage_dashboard.html there to start triage."
 if ($null -ne $result.CombinedTimeline.Path) {
-    Write-Information "The combined timeline is $($result.CombinedTimeline.Path), with $(Format-CombinedRowCount -Rows $result.CombinedTimeline.Rows)."
+    Write-Information "The combined timeline is $($result.CombinedTimeline.Path), with $(Format-CombinedCoverage -Rows $result.CombinedTimeline.Rows -Hosts $result.CombinedTimeline.Hosts -Collections $result.CombinedTimeline.Collections)."
 }
 elseif ($null -ne $result.CombinedTimeline.Error) {
     Write-Information "The combined timeline wasn't built, $($result.CombinedTimeline.Reason), see the warning above."

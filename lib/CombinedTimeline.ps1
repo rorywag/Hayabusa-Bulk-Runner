@@ -633,22 +633,6 @@ function Join-CombinedNameList {
     return ((@($Name | Select-Object -First ($Name.Count - 1)) -join ', ') + ' and ' + $Name[-1])
 }
 
-function Test-CombinedPathIsLink {
-    # True when Path exists and is a link or junction.
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-    if ($null -eq $item) {
-        return $false
-    }
-    return (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-}
-
 function Invoke-CombinedTimeline {
     <#
     .SYNOPSIS
@@ -664,10 +648,13 @@ function Invoke-CombinedTimeline {
         it was. The file is written to a temporary file beside it and moved
         into place only once complete.
 
-        Returns Path, Rows and Hosts when built. Otherwise Error holds the
-        full reason for the warning and Reason a short one for the console
-        and the dashboard. Warnings, a shared computer name among them,
-        are in Warnings and are for the caller to write.
+        Returns Path, Rows and Hosts when built, with Collections, the
+        number in the manifest, and LeftOut, each collection that isn't in
+        it with its status as the reason, so a timeline covering 35 of 40
+        hosts never reads as the whole case. Otherwise Error holds the full
+        reason for the warning and Reason a short one for the console and
+        the dashboard. Warnings, the collections left out and a shared
+        computer name among them, are in Warnings for the caller to write.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -683,12 +670,14 @@ function Invoke-CombinedTimeline {
     $path = Get-CombinedTimelinePath -OutputRoot $OutputRoot
     $temp = "$path.tmp"
     $result = [pscustomobject]@{
-        Path     = $null
-        Rows     = $null
-        Hosts    = $null
-        Error    = $null
-        Reason   = $null
-        Warnings = @()
+        Path        = $null
+        Rows        = $null
+        Hosts       = $null
+        Collections = $null
+        LeftOut     = $null
+        Error       = $null
+        Reason      = $null
+        Warnings    = @()
     }
     $warnings = New-Object System.Collections.Generic.List[string]
     $kept = 'Any earlier combined_timeline.csv was left as it was.'
@@ -709,7 +698,7 @@ function Invoke-CombinedTimeline {
     }
 
     foreach ($p in @($path, $temp)) {
-        if (Test-CombinedPathIsLink -Path $p) {
+        if (Test-PathIsLink -Path $p) {
             return (& $stop 'the output path is a link or junction' "because $p is a link or junction, which could point anywhere. $kept")
         }
         if (Test-Path -LiteralPath $p -PathType Container) {
@@ -812,6 +801,20 @@ function Invoke-CombinedTimeline {
 
     Move-FileIntoPlace -Source $temp -Path $path
 
+    # Say which collections aren't in it and why, so it never passes for
+    # the whole case when some hosts failed or haven't run yet.
+    $leftOut = @($Hosts | Where-Object { $script:ResultStatuses -notcontains $_.Status } | Sort-Object -Property ManifestIndex | ForEach-Object {
+            [pscustomobject]@{ Collection = [string]$_.Collection; Reason = [string]$_.Status }
+        })
+    $total = @($Hosts).Count
+    if ($leftOut.Count -gt 0) {
+        $verb = "aren't"
+        if ($leftOut.Count -eq 1) {
+            $verb = "isn't"
+        }
+        $warnings.Add("Combined timeline: $($leftOut.Count) of $total collections $verb in it, $(Format-CombinedLeftOut -LeftOut $leftOut).")
+    }
+
     # Rows for one computer in two collections can't be told apart in the
     # combined file. Names come from the evidence, so they're sanitised.
     if ($null -ne $merge) {
@@ -847,6 +850,8 @@ function Invoke-CombinedTimeline {
         $result.Rows = [long]$merge.Rows
     }
     $result.Hosts = $included.Count
+    $result.Collections = $total
+    $result.LeftOut = $leftOut
     $result.Warnings = $warnings.ToArray()
     return $result
 }
@@ -868,4 +873,74 @@ function Format-CombinedRowCount {
         return '1 row'
     }
     return ('{0} rows' -f $n.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+}
+
+function Format-CombinedLeftOut {
+    <#
+    .SYNOPSIS
+        The collections left out of the combined timeline, grouped by why.
+    .DESCRIPTION
+        For example "WS05 and WS09 because they failed, FS02 because its
+        timeline couldn't be read, and SQL01 because it hasn't run yet".
+        Failed comes first, then Unreadable, then Pending and Running as
+        not run yet, then anything else, each in the order given. Names
+        are sanitised, since this goes to the console and the run log.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$LeftOut
+    )
+
+    $groups = @(
+        @{ Match = @('Failed'); One = 'because it failed'; Many = 'because they failed' }
+        @{ Match = @('Unreadable'); One = "because its timeline couldn't be read"; Many = "because their timelines couldn't be read" }
+        @{ Match = @('Pending', 'Running'); One = "because it hasn't run yet"; Many = "because they haven't run yet" }
+    )
+    $known = @($groups | ForEach-Object { $_.Match })
+    $groups += @{ Match = $null; One = 'because it has no results'; Many = 'because they have no results' }
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($g in $groups) {
+        $names = @($LeftOut | Where-Object {
+                if ($null -eq $g.Match) { $known -notcontains $_.Reason } else { $g.Match -contains $_.Reason }
+            } | ForEach-Object { ConvertTo-ConsoleText -Text $_.Collection })
+        if ($names.Count -eq 0) {
+            continue
+        }
+        $why = $g.Many
+        if ($names.Count -eq 1) {
+            $why = $g.One
+        }
+        $parts.Add("$(Join-CombinedNameList -Name $names) $why")
+    }
+    if ($parts.Count -le 1) {
+        return ($parts -join '')
+    }
+    return ((@($parts | Select-Object -First ($parts.Count - 1)) -join ', ') + ', and ' + $parts[$parts.Count - 1])
+}
+
+function Format-CombinedCoverage {
+    # "1204331 rows from 35 of 40 collections" when any are left out, and
+    # just the rows when every collection is in it.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [object]$Rows,
+
+        [AllowNull()]
+        [object]$Hosts,
+
+        [AllowNull()]
+        [object]$Collections
+    )
+
+    $text = Format-CombinedRowCount -Rows $Rows
+    if ($null -ne $Hosts -and $null -ne $Collections -and [int]$Hosts -lt [int]$Collections) {
+        $text += " from $Hosts of $Collections collections"
+    }
+    return $text
 }

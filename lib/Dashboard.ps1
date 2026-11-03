@@ -438,7 +438,15 @@ function New-DashboardHtml {
     if ($null -ne $combined) {
         if ($null -ne $combined.Path) {
             $leaf = Split-Path -Path $combined.Path -Leaf
-            [void]$sb.AppendLine("<p class=`"meta`"><a href=`"$(ConvertTo-RelativeHref -Segment @($leaf))`">$(& $e $leaf)</a> holds every included host's timeline in time order, $(& $e (Format-CombinedRowCount -Rows $combined.Rows)) from $(& $e $combined.Hosts) host(s), with Hayabusa's own columns. Open it in Timeline Explorer, as it isn't escaped for Excel.</p>")
+            # The same coverage the run gives, so a timeline that leaves
+            # collections out never passes for the whole case.
+            $covered = "$(& $e $combined.Hosts) of $(& $e $combined.Collections) collections"
+            $missing = ''
+            $leftOut = @($combined.LeftOut | Where-Object { $null -ne $_ })
+            if ($leftOut.Count -gt 0) {
+                $missing = " It leaves out $(& $e (Format-CombinedLeftOut -LeftOut $leftOut))."
+            }
+            [void]$sb.AppendLine("<p class=`"meta`"><a href=`"$(ConvertTo-RelativeHref -Segment @($leaf))`">$(& $e $leaf)</a> holds the timelines of $covered in time order, $(& $e (Format-CombinedRowCount -Rows $combined.Rows)), with Hayabusa's own columns.$missing Open it in Timeline Explorer, as it isn't escaped for Excel.</p>")
         }
         elseif (-not $combined.Enabled) {
             [void]$sb.AppendLine('<p class="meta">The combined timeline is turned off in the engagement config.</p>')

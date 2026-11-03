@@ -285,6 +285,26 @@ function Get-TestEnvironment {
     return , [string[]]@($lines | Sort-Object -CaseSensitive)
 }
 
+function New-TestDanglingLink {
+    <#
+    Makes Path a symbolic link whose target is gone, by linking it to a
+    file beside it and deleting that file. Returns $null when it's made,
+    or why not when this session can't create links, for Set-ItResult.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    $target = "$Path.gone"
+    [System.IO.File]::WriteAllText($target, 'soon gone')
+    try {
+        New-Item -ItemType SymbolicLink -Path $Path -Target $target -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Remove-Item -LiteralPath $target -Force
+        return "this session can't create a symbolic link: $($_.Exception.Message)"
+    }
+    Remove-Item -LiteralPath $target -Force
+    return $null
+}
+
 function Get-TestToolVersion {
     # $ToolVersion as the entry script sets it, so a release needs no test change.
     return [regex]::Match([System.IO.File]::ReadAllText($script:MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value

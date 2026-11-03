@@ -474,10 +474,35 @@ Describe 'The combined timeline in a run' {
         $cr.Rollup.CombinedTimelineRows | Should -Be 4
         $cr.Rollup.CombinedTimelineHosts | Should -Be 2
         $cr.Rollup.Contains('CombinedTimelineError') | Should -BeTrue
+        $cmeta.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($cmeta.Rollup.CombinedTimelineLeftOut).Count | Should -Be 0
+        $cr.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($cr.Rollup.CombinedTimelineLeftOut).Count | Should -Be 0
+    }
+
+    It 'says which collections are left out, in the closing line, the warnings and run-meta' {
+        $inP = New-TestDirectory (Join-TestPath $TestDrive 'in-combined-partial')
+        New-FakeHost -InputRoot $inP -Name 'WS01' -Files @{ 'r.csv' = (@($TimelineHeader) + @(New-TimelineRowSet 'WS01' 'high' 'RuleA' 3)) } | Out-Null
+        New-FakeHost -InputRoot $inP -Name 'WS05' -Behavior "EXIT=2`nCSV=none" | Out-Null
+        $o = Join-TestPath $TestDrive 'out-combined-partial'
+        $iv = $null
+        $w = $null
+        $r = & $MainScript -PassThru -InputRoot $inP -OutputRoot $o -HayabusaPath $hb -WarningVariable w -WarningAction SilentlyContinue -InformationVariable iv -InformationAction SilentlyContinue
+        $path = Join-TestPath $o 'combined_timeline.csv'
+        @($iv | ForEach-Object { "$_" }) | Should -Contain "Combined timeline    $path, 3 rows from 1 of 2 collections"
+        $warning = "Combined timeline: 1 of 2 collections isn't in it, WS05 because it failed."
+        @($w | ForEach-Object { "$_" }) | Should -Contain $warning
+        (@(Get-Content -LiteralPath $r.RunLogPath) -join "`n") | Should -Match ([regex]::Escape("WARNING $warning"))
+        $m = Read-RunMeta $r.RunMetaPath
+        $m.Rollup.CombinedTimelineHosts | Should -Be 1
+        $m.Rollup.CombinedTimelineCollections | Should -Be 2
+        @($m.Rollup.CombinedTimelineLeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('WS05=Failed')
+        @($r.Rollup.CombinedTimelineLeftOut | ForEach-Object { "$($_.Collection)=$($_.Reason)" }) | Should -Be @('WS05=Failed')
+        $r.Rollup.CombinedTimelineCollections | Should -Be 2
     }
 
     It 'is linked from the triage dashboard' {
-        [System.IO.File]::ReadAllText((Join-TestPath $co 'triage_dashboard.html')) | Should -Match ([regex]::Escape('<a href="combined_timeline.csv">combined_timeline.csv</a> holds every included host''s timeline in time order, 4 rows from 2 host(s)'))
+        [System.IO.File]::ReadAllText((Join-TestPath $co 'triage_dashboard.html')) | Should -Match ([regex]::Escape('<a href="combined_timeline.csv">combined_timeline.csv</a> holds the timelines of 2 of 2 collections in time order, 4 rows, with Hayabusa''s own columns. Open it'))
     }
 
     It 'is left out when the config sets CombinedTimeline to $false' {

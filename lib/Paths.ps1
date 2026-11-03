@@ -82,13 +82,42 @@ function Get-CollectionOutputPath {
     }
 }
 
+function Test-PathIsLink {
+    <#
+    .SYNOPSIS
+        True when Path is a link or junction.
+    .DESCRIPTION
+        Judged from the entry's own attributes, so a link whose target is
+        gone still counts. Get-Item can come back empty for one of those
+        on Windows PowerShell 5.1, and writing to it would follow it. A path
+        that doesn't exist is not a link, and any other failure to read the
+        attributes is an error, so the caller never writes on a guess.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    try {
+        $attributes = [System.IO.File]::GetAttributes($Path)
+    }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] {
+        return $false
+    }
+    return (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
 function Write-TextFileAtomic {
     <#
     .SYNOPSIS
         Writes a text file through a temporary file swapped into place.
     .DESCRIPTION
         A crash mid-write leaves the previous file intact. UTF-8, with a
-        byte order mark only when -Bom is given.
+        byte order mark only when -Bom is given. A link or junction at the
+        path or at the temporary path beside it is refused, since writing
+        through it could land anywhere.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -105,12 +134,17 @@ function Write-TextFileAtomic {
     if (-not $PSCmdlet.ShouldProcess($Path, 'Write file')) {
         return
     }
+    $temp = $Path + '.tmp'
+    foreach ($p in @($Path, $temp)) {
+        if (Test-PathIsLink -Path $p) {
+            throw "Cannot write $Path because $p is a link or junction, which could point anywhere."
+        }
+    }
     if (Test-Path -LiteralPath $Path -PathType Container) {
         throw "Cannot write $Path because a folder of that name is in the way."
     }
 
     $encoding = New-Object System.Text.UTF8Encoding($Bom.IsPresent)
-    $temp = $Path + '.tmp'
     [System.IO.File]::WriteAllText($temp, $Text, $encoding)
     Move-FileIntoPlace -Source $temp -Path $Path
 }
@@ -119,6 +153,9 @@ function Move-FileIntoPlace {
     <#
     .SYNOPSIS
         Swaps a finished temporary file into place over Path.
+    .DESCRIPTION
+        A link or junction at Path is refused rather than replaced, so a
+        file never ends up somewhere the link was set up to send it.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -131,6 +168,9 @@ function Move-FileIntoPlace {
 
     if (-not $PSCmdlet.ShouldProcess($Path, 'Replace file')) {
         return
+    }
+    if (Test-PathIsLink -Path $Path) {
+        throw "Cannot replace $Path because it is a link or junction, which could point anywhere."
     }
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
         try {

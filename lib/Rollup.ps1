@@ -598,7 +598,7 @@ function Invoke-Rollup {
 
     $data = Get-RollupData -OutputRoot $OutputRoot
 
-    $combined = [pscustomobject]@{ Enabled = -not $SkipCombinedTimeline; Path = $null; Rows = $null; Hosts = $null; Error = $null; Reason = $null }
+    $combined = [pscustomobject]@{ Enabled = -not $SkipCombinedTimeline; Path = $null; Rows = $null; Hosts = $null; Collections = $null; LeftOut = $null; Error = $null; Reason = $null }
     if ($SkipCombinedTimeline) {
         $combined.Reason = 'turned off in the engagement config'
     }
@@ -608,6 +608,8 @@ function Invoke-Rollup {
             $combined.Path = $built.Path
             $combined.Rows = $built.Rows
             $combined.Hosts = $built.Hosts
+            $combined.Collections = $built.Collections
+            $combined.LeftOut = $built.LeftOut
             $combined.Error = $built.Error
             $combined.Reason = $built.Reason
             foreach ($w in @($built.Warnings)) {
