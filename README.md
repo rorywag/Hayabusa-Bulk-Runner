@@ -33,7 +33,7 @@ The host identity dashboard, over a six-host domain, with one workstation's othe
 
 ## Status
 
-Released. It's early days, so bugs may surface. It's been run against real Hayabusa <!--tested-version-->4.3.1<!--/tested-version--> and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. Two behaviours still need the right evidence to confirm, listed under [Not yet confirmed on Windows](docs/USAGE.md#not-yet-confirmed-on-windows). Check that list before relying on one of them in a report.
+Released. It's early days, so bugs may surface. It's been run against real Hayabusa <!--tested-version-->4.3.1<!--/tested-version--> and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. A full-disk image with several volumes, such as a cloud VM's OS disk, takes paths that KAPE and Velociraptor collections don't, and those haven't yet been run against a real image of that kind. See [Less common image layouts](docs/USAGE.md#less-common-image-layouts).
 
 ## Requirements
 

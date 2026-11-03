@@ -2,13 +2,6 @@
 
 Reference for Hayabusa-Bulk-Runner. For what the tool is, how to get it and a first run, see the [README](../README.md).
 
-## Not yet confirmed on Windows
-
-The tool has been run against real Hayabusa <!--tested-version-->4.3.1<!--/tested-version--> and KAPE images and ZIPs. Each of these two behaviours depends on something the evidence so far didn't have, so treat them as unconfirmed until you've seen them hold:
-
-- Volume checks on `\\?\Volume{...}\` paths when an image has more than one volume. Every image tested had one.
-- The `_mnt` folder fallback, used when Windows gives the mounted image no drive letter: that Hayabusa accepts the folder path as `-d`, and that teardown removes it. Every image tested got a drive letter.
-
 ## Parameters
 
 The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, Force, KeepArtifacts, ConfigPath, IdentityOnly and PassThru. Everything else goes in the [engagement config](#engagement-config): ExactLevel, IncludeTags or ExcludeTags, a time window, the output profile, a custom rules path and the ZIP limits. MinLevel is the only setting that can go in both, and the command line wins. The tool exposes this fixed set on purpose and leaves everything else at Hayabusa's defaults.
@@ -184,6 +177,13 @@ For how the mount keeps the evidence read-only, see [Evidence integrity](../READ
 
 Each disk image is hashed with SHA-256 before it's mounted and again after teardown, to show it wasn't changed. Each hash reads the whole image, so expect a pause before and after a large one. The run says how many images it will hash before it starts, each host's header gives its image's size, and a progress bar shows how much of the image each hash has read. A ZIP holding a disk image is hashed as the extracted image. Loose folders aren't hashed.
 
+### Less common image layouts
+
+KAPE writes its VHD and VHDX containers with one volume, and Velociraptor offline collectors produce ZIPs, so neither reaches the two paths below. They matter for a full-disk image added as a VHD or VHDX, such as a cloud VM's OS disk or a Disk2vhd capture, and both are covered by the unit tests but haven't yet been run against a real image of that kind.
+
+- When an image has several volumes, the tool uses the one holding `Windows\System32\winevt\Logs` and refuses the image if none or more than one does, rather than guess.
+- When Windows gives the mounted volume no drive letter, the tool mounts it at `_mnt\<collection>` under OutputRoot and points Hayabusa at that folder instead, then removes it at teardown.
+
 ## Outputs
 
 Everything lands under OutputRoot:
@@ -279,7 +279,7 @@ It builds a one-event Security log in a temporary folder and runs Hayabusa over 
 
 The sample event is Security 1102, which Hayabusa's own "Log Cleared" rule detects at level high. A detection is needed because Hayabusa writes an empty CSV, with no header row, when it detects nothing, which leaves no columns to check. Three runs must drop that detection: `-e critical`, `--include-tag` with a tag the rule doesn't carry, and `--exclude-tag` with the tag it does. Each passes only when it detects nothing, so a release that accepts a filter but ignores it fails the check. They also show a clean run with no detections passes. The sample check reads the event count from Hayabusa's own summary in the baseline run's log. If Hayabusa read anything but the one event, the sample this check builds is at fault, not the release, and the FAIL line says so.
 
-- **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, then set the same version between each pair of tested-version markers: two in the README, under Status and Requirements, and two in this file, under Not yet confirmed on Windows and this section. A test fails if any of them doesn't match. No code change is needed.
+- **Green:** raise `$script:TestedHayabusaVersion` in `lib\Hayabusa.ps1`, then set the same version between each pair of tested-version markers: two in the README, under Status and Requirements, and one in this file, in this section. A test fails if any of them doesn't match. No code change is needed.
 - **Red:** the FAIL line names the flag, column or level that changed, and for a refused flag, what Hayabusa said on stderr. Fix `New-HayabusaArgument` in `lib\Hayabusa.ps1`, or the result handling in `lib\Results.ps1`, then run the check again.
 
 ## Host identity from registry hives
