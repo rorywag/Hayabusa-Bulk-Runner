@@ -76,7 +76,7 @@ Each step gets a line when it finishes, with its result and how long it took, an
 
 While a step runs, PowerShell's progress bars show which host and step the run is on. A hash shows how much of the image it has read, and Hayabusa shows how long it's been running and the last line it printed. `$ProgressPreference = 'SilentlyContinue'` turns the bars off.
 
-The run ends with a summary table, one row per collection in the run, then the counts with the total time, and where to find each dashboard and the run log. A long collection name is shortened in the middle to keep the table inside the window.
+The run ends with a summary table, one row per collection in the run, then the counts with the total time, and where to find each dashboard, the combined timeline and the run log. A long collection name is shortened in the middle to keep the table inside the window.
 
 The layout fits the window's width, or 120 columns when the output goes to a file or a pipe, and setting the `COLUMNS` environment variable to a whole number between 60 and 500 lets you pick the width yourself.
 
@@ -199,6 +199,7 @@ Everything lands under OutputRoot:
 | `triage_hosts.csv` | One row per collection, worst first, with counts by level and the top rule |
 | `triage_rules.csv` | One row per rule and level, by severity, then how many hosts it fired on |
 | `triage_dashboard.html` | The dashboard |
+| `combined_timeline.csv` | Every included host's Hayabusa timeline in one file, in time order, with the same columns. See [The combined timeline](#the-combined-timeline) |
 | `<Collection>\<Collection>_identity.json` | That host's identity from its registry hives, when `RECmdPath` is set. See [Host identity from registry hives](#host-identity-from-registry-hives) |
 | `identity_dashboard.html` | The host identity dashboard, when `RECmdPath` is set |
 
@@ -209,6 +210,18 @@ A collection whose results name more than one computer is never given just one o
 Values a spreadsheet would treat as a formula, anything starting with `=`, `+`, `-`, `@`, a tab or a carriage return, get a leading `'` in the triage CSVs and the manifest, so opening them in Excel can't run anything. The tool strips that `'` again when it reads its own manifest back.
 
 Severity follows Hayabusa's six levels: emergency, critical, high, medium, low, informational. One emergency outranks any number of criticals.
+
+### The combined timeline
+
+`combined_timeline.csv` holds the same hosts the dashboard counts, those the manifest has as Completed or CompletedWithErrors and whose timeline the rollup could read, so a Failed host's leftover CSV and an Unreadable one never go in. It's built with the rest of the rollup on every run and by `Invoke-HayabusaRollup.ps1`, so it always matches the per-host files, and an `-IdentityOnly` run doesn't build it. The dashboard links it with its row count, and the run's closing lines give its path, or a short reason it wasn't built.
+
+Every row is copied exactly as Hayabusa wrote it, quoted fields included, even ones holding commas or line breaks, and the header is written once. The byte order mark and line endings stay as Hayabusa wrote them. Hayabusa runs with `-U` and `-s`, so each host's timeline is already in time order with every Timestamp in UTC as `yyyy-MM-dd HH:mm:ss.fff +00:00`, and the hosts are merged on that. Rows with the same Timestamp keep the collections' order in the manifest, then their order in the host's own file. It's streamed a row per host at a time, so a large run doesn't need more memory, but it does need free space about the size of all the timelines together, and without it the combined timeline is skipped with a warning. A host that detected nothing adds no rows.
+
+It's all of the included hosts or none, since a timeline missing some would read as complete, so when it can't be trusted the run warns and leaves any earlier `combined_timeline.csv` as it was. Every host must have the same columns, which differ when hosts were run under different output profiles, and the warning names each set of columns with its hosts, so rerunning those hosts with `-Force` under one profile fixes it. A Timestamp that isn't in that form, or a host's file that isn't in time order, stops it too, and the warning names the host and the line. When two collections have rows for the same computer name, such as one machine collected twice, it's still written, and a warning names them, since those rows can't be told apart in it.
+
+Open it in Timeline Explorer rather than Excel. It isn't formula-escaped like the triage CSVs, since it has to match Hayabusa's own per-host timelines exactly, and a large run can pass Excel's limit of 1,048,576 rows.
+
+`CombinedTimeline = $false` in the engagement config skips it, for a run too large to keep a second copy of every timeline. An earlier `combined_timeline.csv` is left where it is then, and the dashboard says it's off. `Invoke-HayabusaRollup.ps1` doesn't read the config, so it always builds it.
 
 ### Working folders
 
@@ -223,7 +236,7 @@ Some folders under OutputRoot belong to the tool:
 
 ### Run-meta
 
-Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. `RunLog` is the path of the run's log, null if it couldn't be written. `SchemaVersion` is 8. Under `Collections` it lists every collection the run found, with these fields:
+Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. `RunLog` is the path of the run's log, null if it couldn't be written. `Rollup` records the rollup's files and counts. Its `CombinedTimeline` is the combined timeline's path, null when it wasn't built, and `CombinedTimelineError` says why. `CombinedTimelineRows` and `CombinedTimelineHosts` count its rows and the hosts in it. `SchemaVersion` is 9. Under `Collections` it lists every collection the run found, with these fields:
 
 | Field | What it holds |
 |---|---|
@@ -249,7 +262,7 @@ The manifest is the record of what's been done. On a rerun, hosts that are Compl
 
 One host failing never stops the batch.
 
-To rebuild the triage files and dashboard from an existing OutputRoot without rerunning anything, on any machine:
+To rebuild the triage files, the dashboard and the combined timeline from an existing OutputRoot without rerunning anything, on any machine:
 
 ```powershell
 .\Invoke-HayabusaRollup.ps1 -OutputRoot D:\Cases\Case01\Output
@@ -258,6 +271,8 @@ To rebuild the triage files and dashboard from an existing OutputRoot without re
 ## Engagement config
 
 Settings that should stay the same for a whole engagement go in a `.psd1` file passed with `-ConfigPath`. Copy [config/engagement.example.psd1](../config/engagement.example.psd1), which lists every setting with a comment, and edit it. It can set the rules path, `MinLevel` or `ExactLevel`, Sigma tag filters, a time window, the output profile and the ZIP limits, and `RECmdPath`, for [host identity from registry hives](#host-identity-from-registry-hives). Use `IncludeTags` or `ExcludeTags`, not both: Hayabusa 4.1.0 won't take the two together, so a config that sets both is refused before anything runs.
+
+`CombinedTimeline = $false` turns off the [combined timeline](#the-combined-timeline), which is on unless it's set. It takes only `$true` or `$false`, so a quoted `'false'` or a `0` is refused before anything runs rather than read the wrong way.
 
 `ExactLevel` sets a single level instead of a floor, for example only critical. MinLevel and ExactLevel are mutually exclusive: a config that sets both is refused, and `-MinLevel` on the command line replaces a config's ExactLevel.
 

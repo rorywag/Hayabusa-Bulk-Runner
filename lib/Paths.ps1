@@ -112,19 +112,38 @@ function Write-TextFileAtomic {
     $encoding = New-Object System.Text.UTF8Encoding($Bom.IsPresent)
     $temp = $Path + '.tmp'
     [System.IO.File]::WriteAllText($temp, $Text, $encoding)
+    Move-FileIntoPlace -Source $temp -Path $Path
+}
 
+function Move-FileIntoPlace {
+    <#
+    .SYNOPSIS
+        Swaps a finished temporary file into place over Path.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Replace file')) {
+        return
+    }
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
         try {
-            [System.IO.File]::Replace($temp, $Path, [NullString]::Value)
+            [System.IO.File]::Replace($Source, $Path, [NullString]::Value)
         }
         catch {
             # File.Replace is not supported on every file system, for
             # example some network shares. Fall back to a plain move.
-            Move-Item -LiteralPath $temp -Destination $Path -Force
+            Move-Item -LiteralPath $Source -Destination $Path -Force
         }
     }
     else {
-        Move-Item -LiteralPath $temp -Destination $Path -Force
+        Move-Item -LiteralPath $Source -Destination $Path -Force
     }
 }
 

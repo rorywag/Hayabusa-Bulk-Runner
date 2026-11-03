@@ -22,7 +22,9 @@
 
     When the batch finishes, the cross-host rollup is rebuilt:
     triage_rules.csv, triage_hosts.csv and triage_dashboard.html under
-    OutputRoot.
+    OutputRoot, along with combined_timeline.csv, every host's timeline in
+    one file in time order, unless the config sets CombinedTimeline to
+    $false.
     Invoke-HayabusaRollup.ps1 rebuilds the same files from an existing
     OutputRoot without rerunning anything.
 
@@ -205,7 +207,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $ToolVersion = '0.11.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
+foreach ($lib in @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -241,6 +243,7 @@ if ($PSBoundParameters.ContainsKey('ConfigPath')) {
 # Host identity is read only when the config names RECmd. A RECmdPath that
 # is set but wrong stops the run here, before anything is written.
 $recmdPath = Resolve-RECmdPath -Config $config
+$combinedTimeline = Get-CombinedTimelineSetting -Config $config
 if ($IdentityOnly -and $null -eq $recmdPath) {
     throw '-IdentityOnly needs RECmdPath, the full path of RECmd.exe, set in the engagement config given with -ConfigPath.'
 }
@@ -484,15 +487,32 @@ try {
     # A rollup failure is recorded and reported, and never hides the batch
     # results already in the manifest. The rollup's own warnings are shown
     # as it writes them and go in the run log after.
-    $rollupRecord = [ordered]@{ HostsCsv = $null; RulesCsv = $null; Dashboard = $null; HostCount = $null; RuleCount = $null; Error = $null }
+    $rollupRecord = [ordered]@{
+        HostsCsv              = $null
+        RulesCsv              = $null
+        Dashboard             = $null
+        HostCount             = $null
+        RuleCount             = $null
+        CombinedTimeline      = $null
+        CombinedTimelineRows  = $null
+        CombinedTimelineHosts = $null
+        CombinedTimelineError = $null
+        Error                 = $null
+    }
+    $combinedReason = 'the rollup failed'
     $rollupWarnings = $null
     try {
-        $rollup = Invoke-Rollup -OutputRoot $OutputRoot -WarningVariable rollupWarnings
+        $rollup = Invoke-Rollup -OutputRoot $OutputRoot -SkipCombinedTimeline:(-not $combinedTimeline) -WarningVariable rollupWarnings
         $rollupRecord.HostsCsv = $rollup.HostsCsv
         $rollupRecord.RulesCsv = $rollup.RulesCsv
         $rollupRecord.Dashboard = $rollup.Dashboard
         $rollupRecord.HostCount = $rollup.HostCount
         $rollupRecord.RuleCount = $rollup.RuleCount
+        $rollupRecord.CombinedTimeline = $rollup.CombinedTimeline.Path
+        $rollupRecord.CombinedTimelineRows = $rollup.CombinedTimeline.Rows
+        $rollupRecord.CombinedTimelineHosts = $rollup.CombinedTimeline.Hosts
+        $rollupRecord.CombinedTimelineError = $rollup.CombinedTimeline.Error
+        $combinedReason = $rollup.CombinedTimeline.Reason
     }
     catch {
         $rollupRecord.Error = $_.Exception.Message
@@ -536,6 +556,15 @@ try {
     }
     else {
         Write-ConsoleLine -Segment @('Triage dashboard     could not be built, see the warning above')
+    }
+    if ($null -ne $rollupRecord.CombinedTimeline) {
+        Write-ConsoleLine -Segment @('Combined timeline    ', $rollupRecord.CombinedTimeline, ", $(Format-CombinedRowCount -Rows $rollupRecord.CombinedTimelineRows)")
+    }
+    elseif ($null -ne $rollupRecord.CombinedTimelineError -or $null -ne $rollupRecord.Error) {
+        Write-ConsoleLine -Segment @("Combined timeline    not built, $combinedReason, see the warning above")
+    }
+    else {
+        Write-ConsoleLine -Segment @("Combined timeline    not built, $combinedReason")
     }
     if ($null -ne $identityRecord) {
         if ($null -eq $identityRecord.Error) {

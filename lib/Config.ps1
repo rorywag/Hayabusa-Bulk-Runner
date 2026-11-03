@@ -13,9 +13,11 @@ $script:ConfigKeys = @(
 
 # Keys read by other parts of the tool, not by Resolve-RunSetting, so they
 # never change how Hayabusa runs. RECmdPath is the full path of RECmd.exe,
-# for reading host identity from registry hives.
+# for reading host identity from registry hives, and CombinedTimeline turns
+# the combined timeline off when set to $false.
 $script:OtherConfigKeys = @(
     'RECmdPath'
+    'CombinedTimeline'
 )
 
 # The ZIP safety limits a run uses when neither the command line nor the
@@ -412,4 +414,52 @@ function Resolve-ZipLimit {
         }
     }
     return (New-ZipLimit -MaxUncompressedGB $gb -MaxRatio $ratio)
+}
+
+function Get-CombinedTimelineSetting {
+    <#
+    .SYNOPSIS
+        Whether the rollup builds combined_timeline.csv, from the config.
+    .DESCRIPTION
+        True unless the config sets CombinedTimeline to $false. Anything
+        but $true or $false is an error, so a quoted 'false' or a 0 can't
+        be read the wrong way.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [AllowNull()]
+        [pscustomobject]$Config
+    )
+
+    if ($null -eq $Config -or -not $Config.Values.ContainsKey('CombinedTimeline')) {
+        return $true
+    }
+    $value = $Config.Values['CombinedTimeline']
+    if ($value -isnot [bool]) {
+        throw "Config file $($Config.Path) sets CombinedTimeline to $(ConvertTo-ConfigValueText -Value $value). Set it to `$true or `$false, or remove the line."
+    }
+    return [bool]$value
+}
+
+function ConvertTo-ConfigValueText {
+    # A config value as it reads in an error message, kept short.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return '$null'
+    }
+    $text = [string]$Value
+    if ($Value -is [string]) {
+        $text = "'$text'"
+    }
+    if ($text.Length -gt 40) {
+        $text = $text.Substring(0, 37) + '...'
+    }
+    return $text
 }

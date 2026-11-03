@@ -45,4 +45,9 @@
     # and -IdentityOnly can be used. A relative path is taken relative to this
     # file.
     # RECmdPath = 'D:\Tools\RECmd\RECmd.exe'
+
+    # The rollup writes combined_timeline.csv, every host's timeline in one
+    # file in time order, unless this is $false. Turn it off for a run too
+    # large to hold a second copy of the timelines.
+    # CombinedTimeline = $false
 }
