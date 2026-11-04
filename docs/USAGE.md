@@ -26,7 +26,7 @@ A rerun skips hosts that already finished, whatever the settings. On a case that
 
 ### Where the tools can be
 
-Hayabusa and RECmd run with the analyst's rights against every host, and Hayabusa loads its rules from wherever RulesPath points, so before anything is written the run refuses a tool or the rules folder that's inside InputRoot or OutputRoot, or on a network share, where someone else could have put it. Each path is followed to where it really leads, through any link or mapped drive on the way, so a path that only looks local is judged by its target. `-HayabusaPath` has to name Hayabusa's own `.exe`, so a `.cmd` or `.bat` wrapper is refused, and run-meta records the SHA-256 of both executables beside their paths.
+Hayabusa and RECmd run with the analyst's rights against every host, and Hayabusa loads its rules from wherever RulesPath points, so before anything is written the run refuses a tool or the rules folder that's inside InputRoot or OutputRoot, where the evidence could have put it, or given as a UNC path to a network share. `-HayabusaPath` has to name Hayabusa's own `.exe`, so a `.cmd` or `.bat` wrapper is refused, and run-meta records the SHA-256 of both executables beside their paths.
 
 Add `-Verbose` for more detail as the run goes, and see [Reading the console](#reading-the-console) for what each line means. `-InformationAction SilentlyContinue` hides the console lines and leaves only the warnings, and the [run log](#the-run-log) is still written. `.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary, PowerShell's own `-?` shows the syntax, and `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
 
@@ -185,9 +185,10 @@ Each disk image is hashed with SHA-256 before it's mounted and again after teard
 
 ### Less common image layouts
 
-KAPE writes its VHD and VHDX containers with one volume, and Velociraptor offline collectors produce ZIPs, so neither reaches the two paths below. They matter for a full-disk image added as a VHD or VHDX, such as a cloud VM's OS disk or a Disk2vhd capture, and both are covered by the unit tests but haven't yet been run against a real image of that kind.
+KAPE writes its VHD and VHDX containers with one volume, and Velociraptor offline collectors produce ZIPs, so neither reaches the paths below. They matter for a full-disk image added as a VHD or VHDX, such as a cloud VM's OS disk or a Disk2vhd capture, and they're covered by the unit tests but haven't yet been run against a real image of that kind.
 
-- When an image has several volumes, the tool uses the one holding `Windows\System32\winevt\Logs` and refuses the image if none or more than one does, rather than guess.
+- When an image has several volumes, the tool uses the one holding `Windows\System32\winevt\Logs` and refuses the image if none or more than one does, rather than guess. A `Windows` folder that's a link doesn't count, so a link can't make it pick the wrong partition.
+- A full-disk image, with `Windows\System32\winevt\Logs` at the volume root, is read from that folder only, and its Mount step says `winevt\Logs only`. A real Windows volume is full of junctions whose targets would resolve against this machine's own drives, and Hayabusa follows links as it walks a folder, so it isn't given the whole volume. Event logs kept anywhere else on such an image aren't read. Every other layout, a KAPE container with its logs one folder down among them, is still read whole.
 - When Windows gives the mounted volume no drive letter, the tool mounts it at `_mnt\<collection>` under OutputRoot and points Hayabusa at that folder instead, then removes it at teardown.
 
 ## Outputs

@@ -267,7 +267,10 @@ function Remove-DifferencingChild {
 
 function Test-VolumeHasEventLog {
     # True if Windows\System32\winevt\Logs sits at the volume root or one
-    # folder down, which is how KAPE lays out its C\Windows\... tree.
+    # folder down, which is how KAPE lays out its C\Windows\... tree. A
+    # Windows folder that's a link, or a link one folder down, doesn't count,
+    # since it could point at logs on another volume, the analyst's own among
+    # them, and make the wrong partition look like the one to read.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -275,13 +278,15 @@ function Test-VolumeHasEventLog {
         [string]$VolumePath
     )
 
-    $rel = [System.IO.Path]::Combine('Windows', 'System32', 'winevt', 'Logs')
+    $rel = [System.IO.Path]::Combine('System32', 'winevt', 'Logs')
     try {
-        if ([System.IO.Directory]::Exists([System.IO.Path]::Combine($VolumePath, $rel))) {
-            return $true
-        }
-        foreach ($dir in [System.IO.Directory]::GetDirectories($VolumePath)) {
-            if ([System.IO.Directory]::Exists([System.IO.Path]::Combine($dir, $rel))) {
+        $bases = @($VolumePath) + @([System.IO.Directory]::GetDirectories($VolumePath))
+        for ($i = 0; $i -lt $bases.Count; $i++) {
+            if ($i -gt 0 -and (Test-PathIsLink -Path $bases[$i])) {
+                continue
+            }
+            $windows = [System.IO.Path]::Combine($bases[$i], 'Windows')
+            if ((Test-Path -LiteralPath $windows) -and -not (Test-PathIsLink -Path $windows) -and [System.IO.Directory]::Exists([System.IO.Path]::Combine($windows, $rel))) {
                 return $true
             }
         }
@@ -414,6 +419,9 @@ function Mount-CollectionImage {
            drive letter Windows assigns, and falls back to an empty folder
            under MountRoot attached with Add-PartitionAccessPath when no
            letter is assigned.
+        6. Returns the volume root as the path for Hayabusa, or for a
+           full-disk image with its logs at the root, that winevt\Logs
+           folder, and the Mount step says so.
 
         Each step that needs undoing is added to Teardown as soon as it
         succeeds, so Invoke-CollectionCleanup can undo a partial mount.
@@ -487,6 +495,7 @@ function Mount-CollectionImage {
     }
     Add-TeardownStep -Teardown $Teardown -Kind 'CheckImageHash' -Target $ImagePath -Record $record
 
+    $mountResult = 'done'
     Start-ConsoleStep -Name 'Mount'
     try {
         New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
@@ -534,11 +543,54 @@ function Mount-CollectionImage {
                 ImageHash   = $record
             }
         }
+
+        # A full-disk image, such as a cloud VM's OS disk, keeps its logs at
+        # the volume root among the junctions a real Windows volume holds,
+        # and their absolute targets would resolve against this machine's
+        # own drives. Hayabusa follows links as it walks a folder, so it's
+        # given the event log folder there rather than the whole volume.
+        $logs = Get-FullDiskEventLogFolder -VolumePath $mounted.Path
+        if ($null -ne $logs) {
+            $mounted.Path = $logs
+            $mountResult = 'done, winevt\Logs only'
+            Write-Verbose "Full-disk image: Hayabusa reads $logs only."
+        }
     }
     catch {
         Complete-ConsoleStep -Failed -Reason $_.Exception.Message
         throw
     }
-    Complete-ConsoleStep -Result 'done'
+    Complete-ConsoleStep -Result $mountResult
     return $mounted
+}
+
+function Get-FullDiskEventLogFolder {
+    <#
+    .SYNOPSIS
+        The Windows\System32\winevt\Logs folder at a mounted volume's root,
+        or null when the logs aren't there.
+    .DESCRIPTION
+        Null for a KAPE container, whose logs are one folder down, so its
+        root still goes to Hayabusa. A link anywhere on the way down to the
+        folder is refused, since it would send Hayabusa to logs that aren't
+        on the image.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$VolumePath
+    )
+
+    $path = $VolumePath
+    foreach ($part in 'Windows', 'System32', 'winevt', 'Logs') {
+        $path = [System.IO.Path]::Combine($path, $part)
+        if (Test-PathIsLink -Path $path) {
+            throw "$path on the mounted image is a link, so the tool won't point Hayabusa at it."
+        }
+        if (-not [System.IO.Directory]::Exists($path)) {
+            return $null
+        }
+    }
+    return $path
 }

@@ -28,6 +28,19 @@ BeforeAll {
     $script:realRemoveExtract = ${function:Remove-CollectionExtract}
     $script:realHash = ${function:Get-ImageSha256}
     function script:Leaf($p) { [System.IO.Path]::GetFileName($p) }
+    function script:New-DirLink([string]$Path, [string]$Target) {
+        # A junction on Windows, which needs no privilege, and a symbolic
+        # link elsewhere. Returns $null when made, or why not.
+        $type = 'SymbolicLink'
+        if ($TestOnWindows) { $type = 'Junction' }
+        try {
+            New-Item -ItemType $type -Path $Path -Target $Target -ErrorAction Stop | Out-Null
+            return $null
+        }
+        catch {
+            return "this session can't create a $type`: $($_.Exception.Message)"
+        }
+    }
     function script:Resolve-Test($c, [switch]$Keep) { Resolve-CollectionInput -Collection $c -OutputRoot $out -MaxUncompressedBytes $cap -MaxRatio 250 -KeepArtifacts:$Keep }
 }
 
@@ -228,6 +241,71 @@ Describe 'Differencing mount orchestration' {
         $script:attached[$stale] = $true
         Get-ThrownMessage { Resolve-Test $rawCol } | Should -BeLike '*Differencing child*still attached*'
         Remove-Item -LiteralPath $stale -Force
+    }
+
+    It 'gives Hayabusa a full-disk image''s winevt\Logs folder, and says so in the Mount step' {
+        $script:volumes = @($vNoLetter)
+        Mock Add-CollectionAccessPath { New-TestDirectory (Join-TestPath $AccessPath.TrimEnd('\') 'Windows' 'System32' 'winevt' 'Logs') | Out-Null }
+        Mock Remove-CollectionAccessPath { Get-ChildItem -LiteralPath $AccessPath.TrimEnd('\') -Force | Remove-Item -Recurse -Force }
+        $iv = $null
+        $r = Resolve-CollectionInput -Collection $vhdCol -OutputRoot $out -MaxUncompressedBytes $cap -MaxRatio 250 -InformationVariable iv -InformationAction SilentlyContinue
+        $mountDir = Join-TestPath $out '_mnt' 'HOST02'
+        try {
+            $r.Path | Should -Be ([System.IO.Path]::Combine($mountDir, 'Windows', 'System32', 'winevt', 'Logs'))
+            $r.MountPath | Should -Be $mountDir -Because 'teardown still works on the mount folder itself'
+            @($iv | ForEach-Object { "$_" } | Where-Object { $_ -like '      Mount *' }) | Should -Match '^      Mount +done, winevt\\Logs only +\d+s$'
+        }
+        finally {
+            Invoke-CollectionCleanup -Resolved $r
+        }
+        Test-Path -LiteralPath $mountDir | Should -BeFalse
+    }
+
+    It 'still gives Hayabusa the volume root for a KAPE layout, with the logs one folder down' {
+        $script:volumes = @($vNoLetter)
+        Mock Add-CollectionAccessPath { New-TestDirectory (Join-TestPath $AccessPath.TrimEnd('\') 'C' 'Windows' 'System32' 'winevt' 'Logs') | Out-Null }
+        Mock Remove-CollectionAccessPath { Get-ChildItem -LiteralPath $AccessPath.TrimEnd('\') -Force | Remove-Item -Recurse -Force }
+        $r = Resolve-Test $vhdCol
+        try {
+            $r.Path | Should -Be (Join-TestPath $out '_mnt' 'HOST02')
+        }
+        finally {
+            Invoke-CollectionCleanup -Resolved $r
+        }
+    }
+
+    It 'refuses a full-disk image whose path to winevt\Logs goes through a link, and still tears down' {
+        $script:volumes = @($vNoLetter)
+        $script:elsewhere = New-TestDirectory (Join-TestPath $dm 'not-on-the-image' 'System32' 'winevt' 'Logs')
+        $script:linkSkip = $null
+        Mock Add-CollectionAccessPath { $script:linkSkip = New-DirLink (Join-TestPath $AccessPath.TrimEnd('\') 'Windows') (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $elsewhere))) }
+        Mock Remove-CollectionAccessPath { Get-ChildItem -LiteralPath $AccessPath.TrimEnd('\') -Force | Remove-Item -Force }
+        $m = Get-ThrownMessage { Resolve-Test $vhdCol }
+        if ($null -ne $linkSkip) { Set-ItResult -Skipped -Because $linkSkip; return }
+        $m | Should -BeLike "*Windows on the mounted image is a link, so the tool won't point Hayabusa at it."
+        Test-Path -LiteralPath (Join-TestPath $out '_mnt' 'HOST02') | Should -BeFalse
+        Test-Path -LiteralPath $elsewhere | Should -BeTrue -Because 'teardown never follows the link'
+    }
+
+    It 'ignores a Windows folder that''s a link when it picks the volume' {
+        $real = New-TestDirectory (Join-TestPath $dm 'host-own' 'System32' 'winevt' 'Logs')
+        $vA = New-TestDirectory (Join-TestPath $dm 'volA-link')
+        $vB = New-TestDirectory (Join-TestPath $dm 'volB-real')
+        New-TestDirectory (Join-TestPath $vB 'C' 'Windows' 'System32' 'winevt' 'Logs') | Out-Null
+        $skip = New-DirLink (Join-TestPath $vA 'Windows') (Join-TestPath $dm 'host-own')
+        if ($null -ne $skip) { Set-ItResult -Skipped -Because $skip; return }
+        Test-VolumeHasEventLog -VolumePath $vA | Should -BeFalse
+        $vC = New-TestDirectory (Join-TestPath $dm 'volC-link-down')
+        $skip = New-DirLink (Join-TestPath $vC 'C') (Join-TestPath $vB 'C')
+        if ($null -ne $skip) { Set-ItResult -Skipped -Because $skip; return }
+        Test-VolumeHasEventLog -VolumePath $vC | Should -BeFalse -Because 'a link one folder down could point anywhere too'
+        $script:volumes = @(
+            [pscustomobject]@{ DiskNumber = 8; PartitionNumber = 1; DriveLetter = 'F'; VolumePath = $vA; FileSystem = 'NTFS' }
+            [pscustomobject]@{ DiskNumber = 8; PartitionNumber = 2; DriveLetter = 'G'; VolumePath = $vB; FileSystem = 'NTFS' })
+        $r = Resolve-Test $rawCol
+        $r.Path | Should -Be 'G:\'
+        Invoke-CollectionCleanup -Resolved $r
+        Test-Path -LiteralPath $real | Should -BeTrue
     }
 
     It 'picks the volume holding event logs when there are several' {

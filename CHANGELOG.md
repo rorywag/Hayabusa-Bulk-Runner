@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 
 - A differencing VHD or VHDX is refused before it's hashed or mounted, since attaching one makes Windows open the parent image it names, wherever that is. The tool reads the image's own format headers to tell, treating every offset and length in them as untrusted, and refuses an image whose headers don't parse cleanly or don't match its extension. The same goes for an image extracted from a ZIP, and a refusal fails that host only.
-- The tools and the rules folder are refused at startup when they're inside InputRoot or OutputRoot, or on a network share, judged by where each path really leads through any link or mapped drive on the way. Before, a config could point RECmdPath at a file in the evidence, which would then run with the analyst's rights. `-HayabusaPath` must also name an `.exe`, so a batch file wrapper is refused.
+- The tools and the rules folder are refused at startup when they're inside InputRoot or OutputRoot, or given as a UNC path to a network share. Before, a config could point RECmdPath at a file in the evidence, which would then run with the analyst's rights. `-HayabusaPath` must also name an `.exe`, so a batch file wrapper is refused.
+- A full-disk image, with its event logs at the volume root, is now read from its `winevt\Logs` folder only. A real Windows volume holds junctions that resolve against the analyst's own drives, and Hayabusa follows links as it walks a folder, so given the whole volume it could have read logs from this machine as the host's. The Mount step says when this applies, and every other layout is read as before. The volume pick also ignores a `Windows` folder that's a link.
 
 ## [0.12.0] - 2026-11-03
 
