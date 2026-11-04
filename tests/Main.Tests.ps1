@@ -52,6 +52,50 @@ Describe 'Quick help' {
     }
 }
 
+Describe 'Tools and rules from somewhere they could have been planted' {
+    BeforeAll {
+        $script:case = New-TestDirectory (Join-TestPath $TestDrive 'planted')
+        $script:pin = New-TestDirectory (Join-TestPath $case 'KAPE')
+        New-FakeHost -InputRoot $pin -Name 'WS01' -Files @{ 'r.csv' = @($TimelineHeader, (New-TimelineRow 'WS01' 'high' 'RuleA')) } | Out-Null
+        $script:pout = Join-TestPath $case 'Output'
+        function script:Assert-NothingWritten { Test-Path -LiteralPath $pout | Should -BeFalse }
+    }
+
+    It 'refuses a HayabusaPath that is a <Kind> file rather than an .exe' -ForEach @(@{ Kind = 'cmd' }, @{ Kind = 'bat' }, @{ Kind = 'ps1' }) {
+        $wrapper = Write-TestText -Path (Join-TestPath $TestDrive 'wrappers' "hayabusa.$Kind") -Line @('x')
+        Get-ThrownMessage { & $MainScript -InputRoot $pin -OutputRoot $pout -HayabusaPath $wrapper } | Should -BeExactly "HayabusaPath $wrapper isn't an .exe file. Point it at hayabusa's own .exe, not a script or batch file that runs it."
+        Assert-NothingWritten
+    }
+
+    It 'refuses a hayabusa.exe inside InputRoot before running it' {
+        $planted = New-FakeHayabusa -Directory (Join-TestPath $pin 'WS01' 'tools')
+        Get-ThrownMessage { & $MainScript -InputRoot $pin -OutputRoot $pout -HayabusaPath $planted } | Should -BeLike "HayabusaPath $planted is inside InputRoot, so the tool won't run it.*"
+        Assert-NothingWritten
+    }
+
+    It 'refuses a hayabusa.exe inside OutputRoot' {
+        $o = New-TestDirectory (Join-TestPath $case 'Output-with-tool')
+        $planted = New-FakeHayabusa -Directory (Join-TestPath $o 'bin')
+        Get-ThrownMessage { & $MainScript -InputRoot $pin -OutputRoot $o -HayabusaPath $planted } | Should -BeLike "HayabusaPath $planted is inside OutputRoot, so the tool won't run it.*"
+        Test-Path -LiteralPath (Join-TestPath $o 'run_manifest.csv') | Should -BeFalse
+    }
+
+    It 'refuses a RECmdPath in another host''s evidence, given relative to the config, before reading any host' {
+        $planted = Write-TestText -Path (Join-TestPath $pin 'WS02' 'Users' 'Public' 'RECmd.exe') -Line @('not a binary')
+        $cfg = Write-TestText -Path (Join-TestPath $case 'engagement-recmd.psd1') -Line @("@{ RECmdPath = 'KAPE/WS02/Users/Public/RECmd.exe' }")
+        Get-ThrownMessage { & $MainScript -InputRoot $pin -OutputRoot $pout -HayabusaPath $hb -ConfigPath $cfg } | Should -BeLike "RECmdPath $planted is inside InputRoot, so the tool won't run it.*"
+        Assert-NothingWritten
+    }
+
+    It 'refuses a RulesPath inside InputRoot before Hayabusa is run' {
+        $rules = New-TestDirectory (Join-TestPath $pin 'WS03' 'rules')
+        Write-TestText -Path (Join-TestPath $rules 'r.yml') -Line @('title: planted') | Out-Null
+        $cfg = Write-TestText -Path (Join-TestPath $case 'engagement-rules.psd1') -Line @("@{ RulesPath = '$rules' }")
+        Get-ThrownMessage { & $MainScript -InputRoot $pin -OutputRoot $pout -HayabusaPath $hb -ConfigPath $cfg } | Should -BeLike "RulesPath $rules is inside InputRoot, so the tool won't load rules from it.*"
+        Assert-NothingWritten
+    }
+}
+
 Describe 'Checks before anything is written' {
     It 'refuses an OutputRoot inside InputRoot' {
         Get-ThrownMessage { & $MainScript -InputRoot $in -OutputRoot (Join-TestPath $in 'results') -HayabusaPath $hb } | Should -BeLike '*must not be inside InputRoot*'
@@ -143,7 +187,7 @@ Describe 'A run' {
     }
     It 'records defaults and provenance in run-meta' {
         $m1.RunId | Should -Be $r1.RunId
-        $m1.SchemaVersion | Should -Be 9
+        $m1.SchemaVersion | Should -Be 10
         # Compared with $ToolVersion as the script sets it, so a release needs no test change.
         $toolVersion = [regex]::Match([System.IO.File]::ReadAllText($MainScript), "(?m)^\`$ToolVersion = '([^']+)'").Groups[1].Value
         $toolVersion | Should -Match '^\d+\.\d+\.\d+$'
@@ -161,6 +205,9 @@ Describe 'A run' {
         $m1.Limits.ZipMaxRatio | Should -Be 250
         $m1.SettingSource.ZipMaxRatio | Should -Be 'Default'
         $m1.Hayabusa.RuleFileCount | Should -Be 1
+        $m1.Hayabusa.Path | Should -Be $hb
+        $m1.Hayabusa.Sha256 | Should -Be (Get-FileHash -LiteralPath $hb -Algorithm SHA256).Hash
+        $m1.RECmd | Should -BeNullOrEmpty -Because 'no RECmdPath is set'
         $raw1 | Should -Match '"StartedUtc":\s*"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"'
         $raw1 | Should -Match '"CompletedUtc":\s*"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"'
         $raw1 | Should -Match '"IncludeTags":\s*\[\s*\]'
@@ -465,7 +512,7 @@ Describe 'The combined timeline in a run' {
     }
 
     It 'is recorded in run-meta and the -PassThru object' {
-        $cmeta.SchemaVersion | Should -Be 9
+        $cmeta.SchemaVersion | Should -Be 10
         $cmeta.Rollup.CombinedTimeline | Should -Be $cpath
         $cmeta.Rollup.CombinedTimelineRows | Should -Be 4
         $cmeta.Rollup.CombinedTimelineHosts | Should -Be 2

@@ -1,8 +1,9 @@
 # Stand-in for hayabusa.exe, used by the tests. It behaves as Hayabusa 4.1.0
 # does, and its help banner reports the version in FAKE_HAYABUSA_VERSION,
-# which TestHelpers.ps1 sets from $script:TestedHayabusaVersion. It runs as
-# its own process through a small launcher (hayabusa.cmd on Windows, a shell
-# script elsewhere) so the tool calls it exactly as it calls the real binary.
+# which its launcher sets from $script:TestedHayabusaVersion. It runs as its
+# own process through a launcher named hayabusa.exe, a small compiled .exe on
+# Windows and a shell script elsewhere, so the tool calls it exactly as it
+# calls the real binary.
 #
 # help        prints a logo and the version banner. FAKE_NO_BANNER drops the
 #             banner, FAKE_HELP_MODE=silent prints no version line at all,

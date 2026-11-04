@@ -397,7 +397,10 @@ function Mount-CollectionImage {
         to hand to -d.
     .DESCRIPTION
         1. Refuses if the parent image is already attached: it was not
-           mounted by this run, so it is left alone.
+           mounted by this run, so it is left alone. Then reads the image's
+           own format headers and refuses a differencing disk, or one whose
+           headers don't parse cleanly, before anything is created, hashed
+           or mounted.
         2. Hashes the parent with SHA-256, and adds a teardown step that
            hashes it again once the child is dismounted and deleted. The
            record of both is added to ImageHashRecord, if given, so the
@@ -446,6 +449,7 @@ function Mount-CollectionImage {
     if (Test-ImageAttached -ImagePath $ImagePath) {
         throw "$ImagePath is already attached. Dismount it first. It was not mounted by this run, so it is left alone."
     }
+    Assert-ImageHasNoParent -ImagePath $ImagePath
 
     if (-not (Test-Path -LiteralPath $DiffRoot -PathType Container)) {
         New-Item -ItemType Directory -Path $DiffRoot -Force | Out-Null

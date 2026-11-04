@@ -1,5 +1,6 @@
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Helpers/TestHelpers.ps1')
+    . (Join-Path $PSScriptRoot 'Helpers/ImageHelpers.ps1')
     $script:cap = [long]1GB
     $script:VolumeWaitSeconds = 0
     $script:DriveLetterWaitSeconds = 0
@@ -7,13 +8,13 @@ BeforeAll {
     $script:dm = New-TestDirectory (Join-TestPath $TestDrive 'dm')
     $script:parentRaw = Join-TestPath $dm 'in' 'HOST01.VHDX'
     New-TestDirectory (Split-Path -Parent $parentRaw) | Out-Null
-    [System.IO.File]::WriteAllBytes($parentRaw, [byte[]](1..200))
+    [System.IO.File]::WriteAllBytes($parentRaw, (New-TestVhdxImage))
     $script:rawCol = @(Get-InputCollection -InputRoot (Split-Path -Parent $parentRaw))[0]
     $script:parentVhd = Join-TestPath $dm 'in2' 'HOST02.vhd'
     New-TestDirectory (Split-Path -Parent $parentVhd) | Out-Null
-    [System.IO.File]::WriteAllBytes($parentVhd, [byte[]](1..100))
+    [System.IO.File]::WriteAllBytes($parentVhd, (New-TestVhdImage -Kind Dynamic))
     $script:vhdCol = @(Get-InputCollection -InputRoot (Split-Path -Parent $parentVhd))[0]
-    $script:zipPath = New-TestZip -Path (Join-TestPath $dm 'zin' 'HOST03.zip') -Entries ([ordered]@{ 'Container/HOST03.vhdx' = 'parent-bytes'; 'Container/HOST03_ConsoleLog.txt' = 'log' })
+    $script:zipPath = New-TestZip -Path (Join-TestPath $dm 'zin' 'HOST03.zip') -Entries ([ordered]@{ 'Container/HOST03.vhdx' = (New-TestVhdxImage); 'Container/HOST03_ConsoleLog.txt' = 'log' }) -NoCompression
     $script:zipCol = @(Get-InputCollection -InputRoot (Split-Path -Parent $zipPath))[0]
     $script:hashRaw = (Get-FileHash -LiteralPath $parentRaw).Hash
     $script:hashZip = (Get-FileHash -LiteralPath $zipPath).Hash

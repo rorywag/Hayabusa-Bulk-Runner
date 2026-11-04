@@ -13,7 +13,7 @@ $script:MainScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-BulkHay
 $script:RollupScript = Join-Path -Path $script:RepoRoot -ChildPath 'Invoke-HayabusaRollup.ps1'
 $script:CompatibilityScript = Join-Path -Path $script:RepoRoot -ChildPath 'Test-HayabusaCompatibility.ps1'
 
-$script:LibOrder = @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
+$script:LibOrder = @('Paths', 'Console', 'Elevation', 'ToolPath', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'ImageFormat', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'Compatibility', 'SparseFile', 'HostIdentity', 'IdentityDashboard')
 foreach ($lib in $script:LibOrder) {
     . (Join-Path -Path $script:RepoRoot -ChildPath "lib/$lib.ps1")
 }
@@ -180,12 +180,74 @@ function Get-TestPowerShellPath {
     return (Get-Process -Id $PID).Path
 }
 
+# The Windows launcher for the fake Hayabusa, a small .exe built once per
+# test file with the C# compiler that ships with .NET Framework. It passes
+# its own command line, exactly as PowerShell quoted it, on to the fake, so
+# the fake gets its arguments the way a real hayabusa.exe would, with no
+# cmd.exe in between.
+$script:FakeHayabusaShim = $null
+$script:FakeHayabusaShimSource = @"
+using System;
+using System.Diagnostics;
+using System.IO;
+
+static class FakeHayabusaShim
+{
+    static int Main()
+    {
+        string[] launch = File.ReadAllLines(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fake-hayabusa.txt"));
+        string line = Environment.CommandLine;
+        int at = 0;
+        if (line.StartsWith("\""))
+        {
+            at = line.IndexOf('"', 1);
+            at = at < 0 ? line.Length : at + 1;
+        }
+        else
+        {
+            while (at < line.Length && line[at] != ' ' && line[at] != '\t') { at++; }
+        }
+        string rest = line.Substring(at).TrimStart(' ', '\t');
+        ProcessStartInfo start = new ProcessStartInfo(launch[0], "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + launch[1] + "\" " + rest);
+        start.UseShellExecute = false;
+        start.EnvironmentVariables["FAKE_HAYABUSA_VERSION"] = launch[2];
+        using (Process child = Process.Start(start))
+        {
+            child.WaitForExit();
+            return child.ExitCode;
+        }
+    }
+}
+"@
+
+function Get-FakeHayabusaShim {
+    # Builds the Windows launcher once per test file, under its TestDrive.
+    if ($null -ne $script:FakeHayabusaShim -and (Test-Path -LiteralPath $script:FakeHayabusaShim)) {
+        return $script:FakeHayabusaShim
+    }
+    $dir = New-TestDirectory -Path (Join-Path -Path $TestDrive -ChildPath 'fake-hayabusa-shim')
+    $source = Join-Path -Path $dir -ChildPath 'FakeHayabusaShim.cs'
+    $exe = Join-Path -Path $dir -ChildPath 'hayabusa.exe'
+    [System.IO.File]::WriteAllText($source, $script:FakeHayabusaShimSource)
+    $csc = Join-Path -Path $env:WINDIR -ChildPath 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    if (-not (Test-Path -LiteralPath $csc)) {
+        $csc = Join-Path -Path $env:WINDIR -ChildPath 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+    }
+    $out = & $csc /nologo /target:exe "/out:$exe" $source 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
+        throw "Could not build the fake Hayabusa launcher: $($out -join ' ')"
+    }
+    $script:FakeHayabusaShim = $exe
+    return $exe
+}
+
 function New-FakeHayabusa {
     <#
     Creates a launcher for FakeHayabusa.ps1 in Directory, plus a rules folder
     and config\profiles.yaml beside it, and returns the launcher path. The
-    launcher runs the fake as its own process with the same PowerShell that
-    is running the tests.
+    launcher is named hayabusa.exe, as the tool requires, and runs the fake
+    as its own process with the same PowerShell that is running the tests.
+    On Windows it's a real .exe, so no cmd.exe stands in between.
     #>
     param([Parameter(Mandatory)][string]$Directory)
     New-TestDirectory -Path $Directory | Out-Null
@@ -194,18 +256,12 @@ function New-FakeHayabusa {
     $config = New-TestDirectory -Path (Join-Path -Path $Directory -ChildPath 'config')
     Copy-Item -LiteralPath $script:ProfilesFixture -Destination (Join-Path -Path $config -ChildPath 'profiles.yaml')
     $hostExe = Get-TestPowerShellPath
+    $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa.exe'
     if ($script:TestOnWindows) {
-        $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa.cmd'
-        Write-TestText -Path $launcher -Line @(
-            '@echo off'
-            'setlocal'
-            "set `"FAKE_HAYABUSA_VERSION=$script:TestedHayabusaVersion`""
-            "`"$hostExe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script:FakeHayabusaScript`" %*"
-            'exit /b %ERRORLEVEL%'
-        ) | Out-Null
+        Copy-Item -LiteralPath (Get-FakeHayabusaShim) -Destination $launcher
+        Write-TestText -Path (Join-Path -Path $Directory -ChildPath 'fake-hayabusa.txt') -Line @($hostExe, $script:FakeHayabusaScript, $script:TestedHayabusaVersion) | Out-Null
     }
     else {
-        $launcher = Join-Path -Path $Directory -ChildPath 'hayabusa'
         Write-TestText -Path $launcher -Line @(
             '#!/bin/sh'
             "FAKE_HAYABUSA_VERSION='$script:TestedHayabusaVersion'"
