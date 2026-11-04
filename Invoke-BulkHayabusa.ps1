@@ -207,7 +207,7 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $ToolVersion = '0.12.0'
 
 $libDir = Join-Path -Path $PSScriptRoot -ChildPath 'lib'
-foreach ($lib in @('Paths', 'Console', 'Elevation', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
+foreach ($lib in @('Paths', 'Console', 'Elevation', 'ToolPath', 'Config', 'Manifest', 'RunMeta', 'Archive', 'Discovery', 'ImageFormat', 'DiskImage', 'Resolve', 'Hayabusa', 'Results', 'Batch', 'Rollup', 'CombinedTimeline', 'Dashboard', 'SparseFile', 'HostIdentity', 'IdentityDashboard')) {
     . (Join-Path -Path $libDir -ChildPath "$lib.ps1")
 }
 
@@ -233,6 +233,17 @@ if (Test-PathIsWithin -Path $InputRoot -Parent $OutputRoot) {
     throw "InputRoot ($InputRoot) must not be inside OutputRoot ($OutputRoot). The tool creates and deletes files under OutputRoot, so evidence there could be deleted. Move the evidence out of OutputRoot, or choose a different OutputRoot."
 }
 
+# Hayabusa runs with the analyst's rights against every host, so it must be
+# its own .exe, never a script or batch file that wraps it, and it must not
+# sit in the evidence, the output or on a share, where someone else could
+# have put it.
+if (-not $IdentityOnly) {
+    if (-not [System.IO.Path]::GetExtension($HayabusaPath).Equals('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "HayabusaPath $HayabusaPath isn't an .exe file. Point it at hayabusa's own .exe, not a script or batch file that runs it."
+    }
+    Assert-ToolPathAllowed -Name 'HayabusaPath' -Path $HayabusaPath -InputRoot $InputRoot -OutputRoot $OutputRoot
+}
+
 # Settings
 $config = $null
 if ($PSBoundParameters.ContainsKey('ConfigPath')) {
@@ -243,6 +254,9 @@ if ($PSBoundParameters.ContainsKey('ConfigPath')) {
 # Host identity is read only when the config names RECmd. A RECmdPath that
 # is set but wrong stops the run here, before anything is written.
 $recmdPath = Resolve-RECmdPath -Config $config
+if ($null -ne $recmdPath) {
+    Assert-ToolPathAllowed -Name 'RECmdPath' -Path $recmdPath -InputRoot $InputRoot -OutputRoot $OutputRoot
+}
 $combinedTimeline = Get-CombinedTimelineSetting -Config $config
 if ($IdentityOnly -and $null -eq $recmdPath) {
     throw '-IdentityOnly needs RECmdPath, the full path of RECmd.exe, set in the engagement config given with -ConfigPath.'
@@ -298,6 +312,7 @@ try {
         if (-not (Test-Path -LiteralPath $resolved.Selection.RulesPath)) {
             throw "RulesPath not found: $($resolved.Selection.RulesPath). Run 'hayabusa.exe update-rules' once at the start of the engagement, or set RulesPath in the config file."
         }
+        Assert-ToolPathAllowed -Name 'RulesPath' -Path $resolved.Selection.RulesPath -InputRoot $InputRoot -OutputRoot $OutputRoot -Use Load
         # Provenance for run-meta. A failed version read is recorded, not fatal.
         $hayabusaVersion = Get-HayabusaVersion -HayabusaPath $HayabusaPath
         $rulesVersion = Get-RulesVersion -RulesPath $resolved.Selection.RulesPath
@@ -470,7 +485,10 @@ try {
         -Threads $threadsValue `
         -Force $Force.IsPresent `
         -KeepArtifacts $KeepArtifacts.IsPresent `
-        -RunLogPath (Get-ConsoleRunLogPath)
+        -RunLogPath (Get-ConsoleRunLogPath) `
+        -HayabusaSha256 (Get-ToolFileSha256 -Path $HayabusaPath) `
+        -RECmdPath $recmdPath `
+        -RECmdSha256 (Get-ToolFileSha256 -Path $recmdPath)
 
     $runMetaPath = Get-RunMetaPath -OutputRoot $OutputRoot -StartedUtc $startedUtc -RunId $runId
     Save-RunMeta -Path $runMetaPath -RunMeta $runMeta | Out-Null

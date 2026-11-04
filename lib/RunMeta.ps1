@@ -1,4 +1,4 @@
-$script:RunMetaSchemaVersion = 9
+$script:RunMetaSchemaVersion = 10
 
 # Deep enough for every nested object in run-meta. ConvertTo-Json defaults
 # to a depth of 2 and silently flattens anything deeper.
@@ -91,12 +91,43 @@ function New-RunMeta {
         # The run log that holds the console's lines for this run.
         [AllowNull()]
         [AllowEmptyString()]
-        [string]$RunLogPath
+        [string]$RunLogPath,
+
+        # The SHA-256 of hayabusa.exe and of RECmd.exe, so a record shows
+        # exactly which binaries ran. RECmdPath is null when identity isn't
+        # read.
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$HayabusaSha256,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$RECmdPath,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$RECmdSha256
     )
 
     $runLog = $null
     if (-not [string]::IsNullOrEmpty($RunLogPath)) {
         $runLog = $RunLogPath
+    }
+
+    $recmdRecord = $null
+    if (-not [string]::IsNullOrEmpty($RECmdPath)) {
+        $recmdHash = $null
+        if (-not [string]::IsNullOrEmpty($RECmdSha256)) {
+            $recmdHash = $RECmdSha256
+        }
+        $recmdRecord = [ordered]@{
+            Path   = $RECmdPath
+            Sha256 = $recmdHash
+        }
+    }
+    $hayabusaHash = $null
+    if (-not [string]::IsNullOrEmpty($HayabusaSha256)) {
+        $hayabusaHash = $HayabusaSha256
     }
 
     $configRecord = $null
@@ -126,6 +157,7 @@ function New-RunMeta {
         Config          = $configRecord
         Hayabusa        = [ordered]@{
             Path              = $HayabusaPath
+            Sha256            = $hayabusaHash
             Version           = $HayabusaVersion.Version
             VersionError      = $HayabusaVersion.Error
             RulesPath         = $Resolved.Selection.RulesPath
@@ -133,6 +165,7 @@ function New-RunMeta {
             NewestRuleFileUtc = $RulesVersion.NewestRuleFileUtc
             RuleFileCount     = $RulesVersion.RuleFileCount
         }
+        RECmd           = $recmdRecord
         Selection       = $Resolved.Selection
         Limits          = $Resolved.Limits
         SettingSource   = $Resolved.Sources

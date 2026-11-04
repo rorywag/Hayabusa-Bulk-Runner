@@ -271,8 +271,15 @@ Describe 'The entry script and host identity' {
         $info | Should -Contain "Identity dashboard   $($r.Identity.Dashboard)"
         @($info | Where-Object { $_ -like 'RECmd *' }).Count | Should -Be 1
         $raw = Get-Content -LiteralPath $r.RunMetaPath -Raw
-        ($raw | ConvertFrom-Json).SchemaVersion | Should -Be 9
-        ($raw -replace '"RunLog":\s*"[^"]*"', '') | Should -Not -Match 'identity|RECmd'
+        $meta = $raw | ConvertFrom-Json
+        $meta.SchemaVersion | Should -Be 10
+        # RECmd's own path and hash are recorded, so the record shows which
+        # binary ran, and nothing else about host identity is.
+        $meta.RECmd.Path | Should -Be $fakeRECmd
+        $meta.RECmd.Sha256 | Should -Be (Get-FileHash -LiteralPath $fakeRECmd -Algorithm SHA256).Hash
+        $meta.PSObject.Properties.Remove('RECmd')
+        $meta.PSObject.Properties.Remove('RunLog')
+        (ConvertTo-Json -InputObject $meta -Depth 20) | Should -Not -Match 'identity|RECmd'
         $html = [System.IO.File]::ReadAllText($r.Identity.Dashboard)
         $html | Should -Match '<td>HOST01</td>'
         $html | Should -Match '<td>HOST02</td>'

@@ -10,7 +10,7 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 |---|---|
 | `-InputRoot` | Parent folder holding one entry per host |
 | `-OutputRoot` | Where everything is written. Created if missing. Must not be inside InputRoot, or hold it |
-| `-HayabusaPath` | Full path to `hayabusa.exe` |
+| `-HayabusaPath` | Full path to `hayabusa.exe` itself, outside InputRoot and OutputRoot and not on a share. See [Where the tools can be](#where-the-tools-can-be) |
 | `-MinLevel` | Severity floor: informational, low, medium, high, critical or emergency. Default medium |
 | `-Threads` | Passed to Hayabusa. Leave it out to let Hayabusa decide |
 | `-Force` | Rerun hosts that already finished |
@@ -23,6 +23,10 @@ The command line takes InputRoot, OutputRoot, HayabusaPath, MinLevel, Threads, F
 `-MinLevel` takes any of the six levels, informational, low, medium (the default), high, critical or emergency, and means that level and up.
 
 A rerun skips hosts that already finished, whatever the settings. On a case that's already been run, add `-Force` so a new floor or config applies to those hosts too.
+
+### Where the tools can be
+
+Hayabusa and RECmd run with the analyst's rights against every host, and Hayabusa loads its rules from wherever RulesPath points, so before anything is written the run refuses a tool or the rules folder that's inside InputRoot or OutputRoot, where the evidence could have put it, or given as a UNC path to a network share. `-HayabusaPath` has to name Hayabusa's own `.exe`, so a `.cmd` or `.bat` wrapper is refused, and run-meta records the SHA-256 of both executables beside their paths.
 
 Add `-Verbose` for more detail as the run goes, and see [Reading the console](#reading-the-console) for what each line means. `-InformationAction SilentlyContinue` hides the console lines and leaves only the warnings, and the [run log](#the-run-log) is still written. `.\Invoke-BulkHayabusa.ps1 -Help`, or `-h`, prints a short usage summary, PowerShell's own `-?` shows the syntax, and `Get-Help .\Invoke-BulkHayabusa.ps1 -Full` lists every parameter.
 
@@ -175,13 +179,16 @@ The differencing disk is created with diskpart, which can't reliably read non-AS
 
 For how the mount keeps the evidence read-only, see [Evidence integrity](../README.md#evidence-integrity) in the README.
 
+Before an image is hashed or mounted, the tool reads its own format headers and refuses a differencing disk, a VHD or VHDX that names a parent image, since attaching it would make Windows open that parent wherever it points, on this machine or on a share. Merge such an image into a standalone one and rerun. An image whose headers don't parse cleanly, or whose content doesn't match its extension, is refused the same way, and either refusal fails that host only, with nothing mounted or written.
+
 Each disk image is hashed with SHA-256 before it's mounted and again after teardown, to show it wasn't changed. Each hash reads the whole image, so expect a pause before and after a large one. The run says how many images it will hash before it starts, each host's header gives its image's size, and a progress bar shows how much of the image each hash has read. A ZIP holding a disk image is hashed as the extracted image. Loose folders aren't hashed.
 
 ### Less common image layouts
 
-KAPE writes its VHD and VHDX containers with one volume, and Velociraptor offline collectors produce ZIPs, so neither reaches the two paths below. They matter for a full-disk image added as a VHD or VHDX, such as a cloud VM's OS disk or a Disk2vhd capture, and both are covered by the unit tests but haven't yet been run against a real image of that kind.
+KAPE writes its VHD and VHDX containers with one volume, and Velociraptor offline collectors produce ZIPs, so neither reaches the paths below. They matter for a full-disk image added as a VHD or VHDX, such as a cloud VM's OS disk or a Disk2vhd capture, and they're covered by the unit tests but haven't yet been run against a real image of that kind.
 
-- When an image has several volumes, the tool uses the one holding `Windows\System32\winevt\Logs` and refuses the image if none or more than one does, rather than guess.
+- When an image has several volumes, the tool uses the one holding `Windows\System32\winevt\Logs` and refuses the image if none or more than one does, rather than guess. A `Windows` folder that's a link doesn't count, so a link can't make it pick the wrong partition.
+- A full-disk image, with `Windows\System32\winevt\Logs` at the volume root, is read from that folder only, and its Mount step says `winevt\Logs only`. A real Windows volume is full of junctions whose targets would resolve against this machine's own drives, and Hayabusa follows links as it walks a folder, so it isn't given the whole volume. Event logs kept anywhere else on such an image aren't read, and a note under the Mount step says so. Moved logs are common on domain controllers and busy servers, the Security log above all, so if this host's were moved, copy them out of the mounted image into a folder and run the tool on that folder instead. Every other layout, a KAPE container with its logs one folder down among them, is still read whole.
 - When Windows gives the mounted volume no drive letter, the tool mounts it at `_mnt\<collection>` under OutputRoot and points Hayabusa at that folder instead, then removes it at teardown.
 
 ## Outputs
@@ -238,7 +245,7 @@ Some folders under OutputRoot belong to the tool:
 
 ### Run-meta
 
-Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. `RunLog` is the path of the run's log, null if it couldn't be written. `Rollup` records the rollup's files and counts. Its `CombinedTimeline` is the combined timeline's path, null when it wasn't built, and `CombinedTimelineError` says why. `CombinedTimelineRows` and `CombinedTimelineHosts` count its rows and the hosts in it. `CombinedTimelineCollections` counts the collections in the manifest, and `CombinedTimelineLeftOut` lists each one that isn't in it with its status as the reason. `SchemaVersion` is 9. Under `Collections` it lists every collection the run found, with these fields:
+Each run writes `_runs\run_meta_<time>_<RunId>.json` when it starts, rewrites it as each host finishes, and completes it when it ends. Each rewrite goes through a temporary file swapped into place, so a run that's interrupted, even mid-write, keeps the record of every host it finished, image hashes included. `Summary` holds the counts so far, and `CompletedUtc` stays null until the run ends, so a record with no `CompletedUtc` is from a run that didn't finish. `RunLog` is the path of the run's log, null if it couldn't be written. `Rollup` records the rollup's files and counts. Its `CombinedTimeline` is the combined timeline's path, null when it wasn't built, and `CombinedTimelineError` says why. `CombinedTimelineRows` and `CombinedTimelineHosts` count its rows and the hosts in it. `CombinedTimelineCollections` counts the collections in the manifest, and `CombinedTimelineLeftOut` lists each one that isn't in it with its status as the reason. `Hayabusa` holds the SHA-256 of `hayabusa.exe` beside its path, and `RECmd` holds the same for `RECmd.exe` when host identity is read. `SchemaVersion` is 10. Under `Collections` it lists every collection the run found, with these fields:
 
 | Field | What it holds |
 |---|---|
@@ -305,7 +312,7 @@ The tool can read each collection's host identity from its registry hives: the c
 
 When the engagement config sets `RECmdPath`, a normal run reads each collection's identity while the collection is extracted or mounted for Hayabusa, so nothing is extracted or mounted twice, and writes `identity_dashboard.html` beside the triage dashboard at the end. Each host's progress line ends with its identity status. Without `RECmdPath`, nothing is read and a run is exactly as before. Reading identity never changes a host's status, its manifest row or run-meta: if it fails, the host's identity file says why and its triage results stand. A host a rerun skips as already finished keeps the identity it has, so run `-IdentityOnly` to read one it doesn't have yet.
 
-It runs Eric Zimmerman's RECmd, tested with version <!--tested-recmd-version-->2026.5.0<!--/tested-recmd-version-->. The tool doesn't download it. Set `RECmdPath` in the engagement config to the full path of `RECmd.exe`, or to a path relative to the config file. It must be outside the evidence: a `RECmd.exe` inside the collection being read is refused.
+It runs Eric Zimmerman's RECmd, tested with version <!--tested-recmd-version-->2026.5.0<!--/tested-recmd-version-->. The tool doesn't download it. Set `RECmdPath` in the engagement config to the full path of `RECmd.exe`, or to a path relative to the config file. It must be outside the evidence and the output and not on a share, as [Where the tools can be](#where-the-tools-can-be) says, and a `RECmd.exe` inside the collection being read is refused again as each host is read.
 
 How it reads a collection:
 

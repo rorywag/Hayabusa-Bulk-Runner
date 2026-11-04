@@ -267,7 +267,10 @@ function Remove-DifferencingChild {
 
 function Test-VolumeHasEventLog {
     # True if Windows\System32\winevt\Logs sits at the volume root or one
-    # folder down, which is how KAPE lays out its C\Windows\... tree.
+    # folder down, which is how KAPE lays out its C\Windows\... tree. A
+    # Windows folder that's a link, or a link one folder down, doesn't count,
+    # since it could point at logs on another volume, the analyst's own among
+    # them, and make the wrong partition look like the one to read.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -275,13 +278,15 @@ function Test-VolumeHasEventLog {
         [string]$VolumePath
     )
 
-    $rel = [System.IO.Path]::Combine('Windows', 'System32', 'winevt', 'Logs')
+    $rel = [System.IO.Path]::Combine('System32', 'winevt', 'Logs')
     try {
-        if ([System.IO.Directory]::Exists([System.IO.Path]::Combine($VolumePath, $rel))) {
-            return $true
-        }
-        foreach ($dir in [System.IO.Directory]::GetDirectories($VolumePath)) {
-            if ([System.IO.Directory]::Exists([System.IO.Path]::Combine($dir, $rel))) {
+        $bases = @($VolumePath) + @([System.IO.Directory]::GetDirectories($VolumePath))
+        for ($i = 0; $i -lt $bases.Count; $i++) {
+            if ($i -gt 0 -and (Test-PathIsLink -Path $bases[$i])) {
+                continue
+            }
+            $windows = [System.IO.Path]::Combine($bases[$i], 'Windows')
+            if ((Test-Path -LiteralPath $windows) -and -not (Test-PathIsLink -Path $windows) -and [System.IO.Directory]::Exists([System.IO.Path]::Combine($windows, $rel))) {
                 return $true
             }
         }
@@ -397,7 +402,10 @@ function Mount-CollectionImage {
         to hand to -d.
     .DESCRIPTION
         1. Refuses if the parent image is already attached: it was not
-           mounted by this run, so it is left alone.
+           mounted by this run, so it is left alone. Then reads the image's
+           own format headers and refuses a differencing disk, or one whose
+           headers don't parse cleanly, before anything is created, hashed
+           or mounted.
         2. Hashes the parent with SHA-256, and adds a teardown step that
            hashes it again once the child is dismounted and deleted. The
            record of both is added to ImageHashRecord, if given, so the
@@ -411,6 +419,10 @@ function Mount-CollectionImage {
            drive letter Windows assigns, and falls back to an empty folder
            under MountRoot attached with Add-PartitionAccessPath when no
            letter is assigned.
+        6. Returns the volume root as the path for Hayabusa, or for a
+           full-disk image with its logs at the root, that winevt\Logs
+           folder. The Mount step says so, and a note under it says event
+           logs moved elsewhere on the volume weren't read.
 
         Each step that needs undoing is added to Teardown as soon as it
         succeeds, so Invoke-CollectionCleanup can undo a partial mount.
@@ -446,6 +458,7 @@ function Mount-CollectionImage {
     if (Test-ImageAttached -ImagePath $ImagePath) {
         throw "$ImagePath is already attached. Dismount it first. It was not mounted by this run, so it is left alone."
     }
+    Assert-ImageHasNoParent -ImagePath $ImagePath
 
     if (-not (Test-Path -LiteralPath $DiffRoot -PathType Container)) {
         New-Item -ItemType Directory -Path $DiffRoot -Force | Out-Null
@@ -483,6 +496,7 @@ function Mount-CollectionImage {
     }
     Add-TeardownStep -Teardown $Teardown -Kind 'CheckImageHash' -Target $ImagePath -Record $record
 
+    $mountResult = 'done'
     Start-ConsoleStep -Name 'Mount'
     try {
         New-DifferencingChild -ParentPath $ImagePath -ChildPath $child
@@ -530,11 +544,60 @@ function Mount-CollectionImage {
                 ImageHash   = $record
             }
         }
+
+        # A full-disk image, such as a cloud VM's OS disk, keeps its logs at
+        # the volume root among the junctions a real Windows volume holds,
+        # and their absolute targets would resolve against this machine's
+        # own drives. Hayabusa follows links as it walks a folder, so it's
+        # given the event log folder there rather than the whole volume.
+        $logs = Get-FullDiskEventLogFolder -VolumePath $mounted.Path
+        if ($null -ne $logs) {
+            $mounted.Path = $logs
+            $mountResult = 'done, winevt\Logs only'
+            Write-Verbose "Full-disk image: Hayabusa reads $logs only."
+        }
     }
     catch {
         Complete-ConsoleStep -Failed -Reason $_.Exception.Message
         throw
     }
-    Complete-ConsoleStep -Result 'done'
+    Complete-ConsoleStep -Result $mountResult
+    if ($null -ne $logs) {
+        # Admins often move the event logs, the Security log above all on
+        # domain controllers and busy servers, so this says plainly that
+        # those weren't read.
+        Write-ConsoleNote -Indent $script:ConsoleStepIndent -Text 'Only Windows\System32\winevt\Logs was read, so event logs moved elsewhere on this volume weren''t.'
+    }
     return $mounted
+}
+
+function Get-FullDiskEventLogFolder {
+    <#
+    .SYNOPSIS
+        The Windows\System32\winevt\Logs folder at a mounted volume's root,
+        or null when the logs aren't there.
+    .DESCRIPTION
+        Null for a KAPE container, whose logs are one folder down, so its
+        root still goes to Hayabusa. A link anywhere on the way down to the
+        folder is refused, since it would send Hayabusa to logs that aren't
+        on the image.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$VolumePath
+    )
+
+    $path = $VolumePath
+    foreach ($part in 'Windows', 'System32', 'winevt', 'Logs') {
+        $path = [System.IO.Path]::Combine($path, $part)
+        if (Test-PathIsLink -Path $path) {
+            throw "$path on the mounted image is a link, so the tool won't point Hayabusa at it."
+        }
+        if (-not [System.IO.Directory]::Exists($path)) {
+            return $null
+        }
+    }
+    return $path
 }
