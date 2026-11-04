@@ -285,7 +285,12 @@ Describe 'Differencing mount orchestration' {
         $script:elsewhere = New-TestDirectory (Join-TestPath $dm 'not-on-the-image' 'System32' 'winevt' 'Logs')
         $script:linkSkip = $null
         Mock Add-CollectionAccessPath { $script:linkSkip = New-DirLink (Join-TestPath $AccessPath.TrimEnd('\') 'Windows') (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $elsewhere))) }
-        Mock Remove-CollectionAccessPath { Get-ChildItem -LiteralPath $AccessPath.TrimEnd('\') -Force | Remove-Item -Force }
+        # Removes the link itself, with no recursion, since Remove-Item on 5.1
+        # won't take a link to a folder and could reach into what it points at.
+        Mock Remove-CollectionAccessPath {
+            $windows = Join-TestPath $AccessPath.TrimEnd('\') 'Windows'
+            if (Test-PathIsLink -Path $windows) { [System.IO.Directory]::Delete($windows) }
+        }
         $m = Get-ThrownMessage { Resolve-Test $vhdCol }
         if ($null -ne $linkSkip) { Set-ItResult -Skipped -Because $linkSkip; return }
         $m | Should -BeLike "*Windows on the mounted image is a link, so the tool won't point Hayabusa at it."
