@@ -421,7 +421,8 @@ function Mount-CollectionImage {
            letter is assigned.
         6. Returns the volume root as the path for Hayabusa, or for a
            full-disk image with its logs at the root, that winevt\Logs
-           folder, and the Mount step says so.
+           folder. The Mount step says so, and a note under it says event
+           logs moved elsewhere on the volume weren't read.
 
         Each step that needs undoing is added to Teardown as soon as it
         succeeds, so Invoke-CollectionCleanup can undo a partial mount.
@@ -561,6 +562,12 @@ function Mount-CollectionImage {
         throw
     }
     Complete-ConsoleStep -Result $mountResult
+    if ($null -ne $logs) {
+        # Admins often move the event logs, the Security log above all on
+        # domain controllers and busy servers, so this says plainly that
+        # those weren't read.
+        Write-ConsoleNote -Indent $script:ConsoleStepIndent -Text 'Only Windows\System32\winevt\Logs was read, so event logs moved elsewhere on this volume weren''t.'
+    }
     return $mounted
 }
 

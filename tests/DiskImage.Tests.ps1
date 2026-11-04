@@ -253,7 +253,10 @@ Describe 'Differencing mount orchestration' {
         try {
             $r.Path | Should -Be ([System.IO.Path]::Combine($mountDir, 'Windows', 'System32', 'winevt', 'Logs'))
             $r.MountPath | Should -Be $mountDir -Because 'teardown still works on the mount folder itself'
-            @($iv | ForEach-Object { "$_" } | Where-Object { $_ -like '      Mount *' }) | Should -Match '^      Mount +done, winevt\\Logs only +\d+s$'
+            $lines = @($iv | ForEach-Object { "$_" })
+            @($lines | Where-Object { $_ -like '      Mount *' }) | Should -Match '^      Mount +done, winevt\\Logs only +\d+s$'
+            $mountAt = [array]::IndexOf($lines, @($lines | Where-Object { $_ -like '      Mount *' })[0])
+            $lines[$mountAt + 1] | Should -BeExactly "      Only Windows\System32\winevt\Logs was read, so event logs moved elsewhere on this volume weren't." -Because 'the note sits right under the Mount step'
         }
         finally {
             Invoke-CollectionCleanup -Resolved $r
@@ -265,9 +268,12 @@ Describe 'Differencing mount orchestration' {
         $script:volumes = @($vNoLetter)
         Mock Add-CollectionAccessPath { New-TestDirectory (Join-TestPath $AccessPath.TrimEnd('\') 'C' 'Windows' 'System32' 'winevt' 'Logs') | Out-Null }
         Mock Remove-CollectionAccessPath { Get-ChildItem -LiteralPath $AccessPath.TrimEnd('\') -Force | Remove-Item -Recurse -Force }
-        $r = Resolve-Test $vhdCol
+        $iv = $null
+        $r = Resolve-CollectionInput -Collection $vhdCol -OutputRoot $out -MaxUncompressedBytes $cap -MaxRatio 250 -InformationVariable iv -InformationAction SilentlyContinue
         try {
             $r.Path | Should -Be (Join-TestPath $out '_mnt' 'HOST02')
+            @($iv | ForEach-Object { "$_" } | Where-Object { $_ -like '*event logs moved elsewhere*' }).Count | Should -Be 0 -Because 'a KAPE layout is read whole'
+            @($iv | ForEach-Object { "$_" } | Where-Object { $_ -like '      Mount *' }) | Should -Match '^      Mount +done +\d+s$'
         }
         finally {
             Invoke-CollectionCleanup -Resolved $r
