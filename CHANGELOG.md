@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Run-meta's `SchemaVersion` is now 10. `Hayabusa` gains `Sha256`, the hash of `hayabusa.exe`, and a new `RECmd` record holds the path and hash of `RECmd.exe` when host identity is read, so a record shows exactly which binaries ran.
+- Tested against Hayabusa 4.4.0, which passed the compatibility self-test. A run with 4.4.0 no longer starts with the notice that the version wasn't tested, and a run with 4.3.1 now does. 4.4.0 only exits nonzero after a partial read when it's scanning images with its new `--vhdx` or `--e01` options, which the tool doesn't use, so a folder with one log Hayabusa can't read still ends Completed, as it did with 4.3.1.
 
 ### Security
 
