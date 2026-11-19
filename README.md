@@ -33,13 +33,13 @@ The host identity dashboard, over a six-host domain, with one workstation's othe
 
 ## Status
 
-Released. It's early days, so bugs may surface. It's been run against real Hayabusa <!--tested-version-->4.3.1<!--/tested-version--> and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. A full-disk image with several volumes, such as a cloud VM's OS disk, takes paths that KAPE and Velociraptor collections don't, and those haven't yet been run against a real image of that kind. See [Less common image layouts](docs/USAGE.md#less-common-image-layouts).
+Released. It's early days, so bugs may surface. It's been run against real Hayabusa <!--tested-version-->4.4.0<!--/tested-version--> and KAPE images and ZIPs on Windows, and the test suite runs in CI on Windows PowerShell 5.1, PowerShell 7 on Windows, and PowerShell 7 on Linux. A full-disk image with several volumes, such as a cloud VM's OS disk, takes paths that KAPE and Velociraptor collections don't, and those haven't yet been run against a real image of that kind. See [Less common image layouts](docs/USAGE.md#less-common-image-layouts).
 
 ## Requirements
 
 - Windows. This tool runs Hayabusa and mounts disk images on Windows only. The rollup can be rebuilt anywhere PowerShell runs.
 - Windows PowerShell 5.1 or PowerShell 7.
-- Hayabusa <!--tested-version-->4.3.1<!--/tested-version--> with its rules. Run `hayabusa.exe update-rules` once at the start of the engagement and leave the rules alone until it's finished, so every host is checked against the same set.
+- Hayabusa <!--tested-version-->4.4.0<!--/tested-version--> with its rules. Run `hayabusa.exe update-rules` once at the start of the engagement and leave the rules alone until it's finished, so every host is checked against the same set.
 - An elevated session if any collection is a disk image, including a disk image inside a ZIP.
 - For host identity only, Eric Zimmerman's RECmd. See [Host identity](#host-identity).
 
@@ -65,7 +65,7 @@ It prints a header, then a block for each host as it goes with a line for each s
 Hayabusa-Bulk-Runner 0.12.0, running Hayabusa
 Input     D:\Cases\Case01\KAPE, 4 collections, 3 folders, 1 VHDX
 Output    D:\Cases\Case01\Output
-Hayabusa  4.3.1, D:\Tools\hayabusa\hayabusa.exe
+Hayabusa  4.4.0, D:\Tools\hayabusa\hayabusa.exe
 Rules     newest rule file 2026-10-30T09:12:44Z, 4321 rule files
 
 Before the run

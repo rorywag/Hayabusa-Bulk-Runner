@@ -293,10 +293,10 @@ It's read as data only, so it can't run code. Unknown keys are rejected, so a ty
 
 ## Checking a new Hayabusa release
 
-The tool is tested against Hayabusa <!--tested-version-->4.3.1<!--/tested-version-->, and a run with any other version starts with a warning saying so. Before using a new release on a case, run the compatibility self-test against the new binary and its rules:
+The tool is tested against Hayabusa <!--tested-version-->4.4.0<!--/tested-version-->, and a run with any other version starts with a warning saying so. Before using a new release on a case, run the compatibility self-test against the new binary and its rules:
 
 ```powershell
-.\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.3.1\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.3.1\rules
+.\Test-HayabusaCompatibility.ps1 -HayabusaPath D:\Tools\hayabusa-4.4.0\hayabusa.exe -RulesPath D:\Tools\hayabusa-4.4.0\rules
 ```
 
 It builds a one-event Security log in a temporary folder and runs Hayabusa over it five times, with arguments built by the same code as a real run, so between them every flag the tool can pass is sent. It then prints PASS or FAIL for each check: the version was read, every flag was sent, Hayabusa read the sample's one event, each run was accepted and its filters applied, the CSV has the `Level`, `Computer` and `RuleTitle` columns, and every `Level` value maps to one of the six severities. It exits 0 when everything passes and 1 otherwise. It needs Windows but not an elevated session, and `-KeepArtifacts` keeps the temporary folder with each run's CSV, report and log.
